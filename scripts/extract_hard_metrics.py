@@ -179,7 +179,10 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
 
     # 四字格密度（刘叔新 1990；操作化口径：jieba 分词 ∩ THUOCL 成语词表）
     _idioms = _load_idioms()
-    four_char = sum(1 for w in jieba.lcut(text) if w in _idioms)
+    try:
+        four_char = sum(1 for w in words if w in _idioms)
+    except Exception:
+        four_char = 0
 
     # 指代回指代理（Halliday & Hasan 1976；Ariel 1990；代词密度 + 句均代词）
     pronoun_total = sum(text.count(p) for p in PRONOUNS)
