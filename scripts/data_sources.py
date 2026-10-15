@@ -33,7 +33,7 @@ def resolve(value: str | None, what: str, required: bool = True) -> Path | None:
     env = dict(os.environ)
     env.setdefault("WFP_ROOT", str(WFP_ROOT))
     s = re.sub(r"\$\{(\w+)\}|\$(\w+)", lambda m: env.get(m.group(1) or m.group(2), m.group(0)), s)
-    left = re.findall(r"\$\{\w+\}|\$\w+", s)
+    left = list(dict.fromkeys(re.findall(r"\$\{\w+\}|\$\w+", s)))
     if left:
         if required:
             sys.exit(f"错误：{what} 路径含未设置的环境变量 {left}：{s}\n"
