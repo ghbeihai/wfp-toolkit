@@ -41,13 +41,19 @@ def main():
             if not isinstance(entry, dict):
                 continue
             dim = entry.get("dim", "")
-            score = entry.get("score", 0)
+            score = entry.get("score")
             dim_name = entry.get("dim_name", dim)
-            if score <= 0:
-                continue
+            if (not isinstance(score, (int, float)) or score <= 0
+                    or entry.get("failed") or entry.get("simulated")):
+                continue  # 失败/模拟分不进基线
             if dim not in dim_scores:
                 dim_scores[dim] = {"scores": [], "dim_name": dim_name}
             dim_scores[dim]["scores"].append(score)
+
+    if not dim_scores:
+        print(f"错误：{scores_dir} 下没有可用的 L3 评分（0 篇有效 JSON / 0 个有效维度），未写出基线。",
+              file=sys.stderr)
+        sys.exit(1)
 
     # 算每维均值和 sd
     baseline = {}

@@ -78,26 +78,35 @@ def split_text(text: str, max_len: int = CHUNK_SIZE) -> list[str]:
     return chunks if chunks else [text]
 
 
-def score_chunk(text: str, client, model: str) -> list:
-    resp = client.chat.completions.create(
-        model=model,
-        temperature=0.0,
-        max_tokens=4096,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ],
-    )
-    content = resp.choices[0].message.content.strip()
-    if content.startswith("```"):
-        content = re.sub(r"^```(?:json)?\s*", "", content)
-        content = re.sub(r"\s*```$", "", content)
-    try:
-        data = json.loads(content)
-        return data.get("metaphors", [])
-    except json.JSONDecodeError:
-        print(f"[warn] JSON 解析失败，跳过这一块", file=sys.stderr)
-        return []
+def score_chunk(text: str, client, model: str, retries: int = 2):
+    """返回该块的隐喻列表；被截断（finish_reason=length）或 JSON 解析失败时重试，
+    仍失败返回 None（调用方计入 failed_chunks，而不是静默当作 0 个隐喻）。"""
+    for attempt in range(retries + 1):
+        resp = client.chat.completions.create(
+            model=model,
+            temperature=0.0,
+            max_tokens=8192,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": text},
+            ],
+        )
+        choice = resp.choices[0]
+        content = (choice.message.content or "").strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content)
+        truncated = getattr(choice, "finish_reason", None) == "length"
+        try:
+            data = json.loads(content)
+            if not truncated:
+                return data.get("metaphors", [])
+        except json.JSONDecodeError:
+            pass
+        print(f"[warn] 分块输出{'被截断' if truncated else ' JSON 解析失败'}（第 {attempt + 1}/{retries + 1} 次）",
+              file=sys.stderr)
+    return None
 
 
 def main():
@@ -121,10 +130,17 @@ def main():
     # 分块打分
     chunks = split_text(text)
     all_metaphors = []
+    failed_chunks = []
     for i, chunk in enumerate(chunks):
         if len(chunks) > 1:
             print(f"  分块 {i+1}/{len(chunks)}（{len(chunk)} 字）...", file=sys.stderr)
-        all_metaphors.extend(score_chunk(chunk, client, args.model))
+        got = score_chunk(chunk, client, args.model)
+        if got is None:
+            failed_chunks.append(i)
+        else:
+            all_metaphors.extend(got)
+    if failed_chunks:
+        print(f"[warn] {len(failed_chunks)}/{len(chunks)} 个分块失败，结果偏低：{failed_chunks}", file=sys.stderr)
 
     # 按根域聚合
     domain_counts = {d: 0 for d in METAPHOR_DOMAINS}
@@ -140,6 +156,8 @@ def main():
         "meta_per_k": round(total / max(chars, 1) * 1000, 3),
         "domain_counts": domain_counts,
         "domain_per_k": {d: round(n / max(chars, 1) * 1000, 3) for d, n in domain_counts.items()},
+        "failed_chunks": failed_chunks,
+        "n_chunks": len(chunks),
         "examples": [{"text": m.get("text", "")[:60], "domain": m.get("domain", "")} for m in all_metaphors[:10]],
     }
 

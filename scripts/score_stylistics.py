@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -167,7 +168,9 @@ class StylisticScorer:
                         print(f"    [warn] {name} t={t} 失败: {ex}")
                     time.sleep(1.5)
         if not raw_scores:
-            return {"score": 0.0, "raw_scores": [], "evidence": [], "confidence": 0.0, "simulated": True}
+            # 全部重试失败：score=None + failed 标记，不再伪装成 0 分/模拟分混进均值
+            return {"score": None, "raw_scores": [], "evidence": [], "confidence": 0.0,
+                    "simulated": False, "failed": True}
         return {
             "score": round(sum(raw_scores) / len(raw_scores), 2),
             "raw_scores": raw_scores,
@@ -235,7 +238,7 @@ def main():
                 existing = json.loads(out_path.read_text(encoding="utf-8"))
             for dim in dims:
                 key = f"{doc['id']}::{dim['id']}"
-                if key in existing and existing[key].get("score", 0) > 0 and not existing[key].get("simulated", False):
+                if key in existing and (existing[key].get("score") or 0) > 0 and not existing[key].get("simulated", False):
                     continue
                 yield doc, out_path, existing, key, dim
 
