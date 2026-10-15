@@ -36,6 +36,7 @@ import os
 import re
 import statistics
 import sys
+from pathlib import Path
 from collections import Counter
 
 PUNCT_ORDER = ["，", "。", "！", "？", "、", "；", "：", "——", "……", "“", "”"]
@@ -112,8 +113,18 @@ def split_paragraphs(raw: str) -> list:
 _JIEBA_WARNED = False
 
 
-def per_k(chars: int, n: int) -> float:
-    return round(n * 1000.0 / max(chars, 1), 3)
+def per_k(chars: int, n: int):
+    """每千字密度；空文本（chars==0）返回 None（不是 0）。"""
+    if not chars:
+        return None
+    return round(n * 1000.0 / chars, 3)
+
+
+def smoothed_ratio(a: int, b: int):
+    """(a+1)/(b+1)：分母为 0 时不再退化成分子原始计数（篇幅相关）；两者都为 0 → None。"""
+    if not a and not b:
+        return None
+    return round((a + 1) / (b + 1), 3)
 
 
 def sttr(text: str, window: int = 100, step: int = 50) -> float:
@@ -209,8 +220,7 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
         "L1_LEX_004_yqci_per_k": {y: per_k(chars, text.count(y)) for y in YQCI},
         "L1_LEX_005_dm": {m: text.count(m) for m in DISCOURSE_MARKERS},
         "L1_LEX_006_pron_per_k": {p: per_k(chars, text.count(p)) for p in PRONOUNS},
-        "L1_LEX_006_wo_ni_ratio": (round(text.count("我") / max(text.count("你"), 1), 3)
-                                   if (text.count("我") or text.count("你")) else None),
+        "L1_LEX_006_wo_ni_ratio": smoothed_ratio(text.count("我"), text.count("你")),
         "L1_LEX_007_pos_per_k": per_k(chars, pos_n),
         "L1_LEX_007_neg_per_k": per_k(chars, neg_n),
         "L1_LEX_008_cog_per_k": {w: per_k(chars, text.count(w)) for w in COGNITIVE_WORDS},
@@ -238,46 +248,19 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
         "L4_SUR_002_value_per_k": per_k(chars, value_n),
         "L4_SUR_003_pos_per_k": per_k(chars, pos_n),
         "L4_SUR_003_neg_per_k": per_k(chars, neg_n),
-        "L4_SUR_003_pos_neg_ratio": round((pos_n / max(neg_n, 1)), 3),
+        "L4_SUR_003_pos_neg_ratio": smoothed_ratio(pos_n, neg_n),
         "sentences": len(sents),
     }
     return res
 
 
-def summarize(files: list) -> dict:
+def summarize(files: list, name: str = "", min_docs: int = 5) -> dict:
+    """逐篇指纹 JSON → 基线（与 replicate.py 同一实现 field_map.aggregate_baseline）。"""
+    from field_map import aggregate_baseline
+    if not files:
+        raise SystemExit("错误：--summary 没有匹配到任何指纹 JSON")
     rows = [json.load(open(f, encoding="utf-8")) for f in files]
-    keys = [k for k in rows[0] if isinstance(rows[0][k], (int, float))]
-    base = {}
-    for k in keys:
-        vals = [r[k] for r in rows if isinstance(r.get(k), (int, float)) and r[k] is not None]
-        if vals:
-            base[k] = {
-                "mean": round(statistics.mean(vals), 4),
-                "sd": round(statistics.pstdev(vals), 4) if len(vals) > 1 else 0.0,
-                "n": len(vals),
-            }
-        # 句数分层基线（v0.4.19.1）：burstiness 存在短文 CV 系统性偏低，
-        # 按句数档位单独聚合，供 delta() 按样本句数自动选档
-        if k == "L1_SYN_007_burstiness":
-            short_vals = [r[k] for r in rows
-                          if isinstance(r.get(k), (int, float)) and r[k] is not None
-                          and 15 <= r.get("sentences", 0) <= 45]
-            long_vals = [r[k] for r in rows
-                         if isinstance(r.get(k), (int, float)) and r[k] is not None
-                         and r.get("sentences", 0) >= 50]
-            if short_vals:
-                base[f"{k}__short"] = {
-                    "mean": round(statistics.mean(short_vals), 4),
-                    "sd": round(statistics.pstdev(short_vals), 4) if len(short_vals) > 1 else 0.0,
-                    "n": len(short_vals),
-                }
-            if long_vals:
-                base[f"{k}__long"] = {
-                    "mean": round(statistics.mean(long_vals), 4),
-                    "sd": round(statistics.pstdev(long_vals), 4) if len(long_vals) > 1 else 0.0,
-                    "n": len(long_vals),
-                }
-    return {"n_docs": len(rows), "baseline": base}
+    return aggregate_baseline(rows, name=name, min_docs=min_docs, version="extract_hard_metrics --summary")
 
 
 def main() -> None:
@@ -287,32 +270,45 @@ def main() -> None:
     ap.add_argument("--corpus-spi", action="store_true", help="SPI 431 篇全量（篇章级）")
     ap.add_argument("--corpus-aot", action="store_true", help="AoT 块级全量")
     ap.add_argument("--limit", type=int, default=0, help="限制处理篇数（0=全量）")
-    ap.add_argument("--summary", nargs="+", help="聚合指纹 JSON 生成基线")
+    ap.add_argument("--summary", nargs="+", help="聚合指纹 JSON 生成基线（与 replicate.py 同口径）")
+    ap.add_argument("--name", default="", help="--summary：基线 corpus 名")
+    ap.add_argument("--min-docs", type=int, default=5, help="--summary：最少篇数（默认 5）")
+    ap.add_argument("--spi-path", help="覆盖 data_sources.yaml 的 SPI 篇章 JSON 路径")
+    ap.add_argument("--aot-dir", help="覆盖 data_sources.yaml 的 AoT 块目录")
     args = ap.parse_args()
 
     if args.summary:
+        from field_map import DegenerateBaseline
         files = []
         for g in args.summary:
             files.extend(glob.glob(g))
-        base = summarize(files)
+        try:
+            base = summarize(sorted(set(files)), args.name, args.min_docs)
+        except DegenerateBaseline as e:
+            sys.exit(f"错误：{e}")
         print(json.dumps(base, ensure_ascii=False, indent=2))
         return
 
-    # v0.4.20：数据源从 config/data_sources.yaml 读取（CLI 参数可覆盖）
-    import yaml as _yaml
-    WFP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _ds = _yaml.safe_load(open(os.path.join(WFP_ROOT, "config/data_sources.yaml"), encoding="utf-8"))
-    SPI_PATH = getattr(args, "spi_path", None) or _ds["corpus"]["spi_articles"]
-    AOT_DIR = getattr(args, "aot_dir", None) or _ds["corpus"]["aot_dir"]
+    # 数据源从 config/data_sources.yaml 读取（${VAR} 按环境变量展开；--spi-path/--aot-dir 覆盖）
+    import data_sources as _dsm
+    _ds = _dsm.load()
+    SPI_PATH = AOT_DIR = None
+    if args.corpus_spi:
+        SPI_PATH = Path(args.spi_path) if args.spi_path else _dsm.resolve(_ds["corpus"]["spi_articles"], "SPI 篇章 JSON")
+    if args.corpus_aot:
+        AOT_DIR = Path(args.aot_dir) if args.aot_dir else _dsm.resolve(_ds["corpus"]["aot_dir"], "AoT 块目录")
     OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "results", "fingerprints")
-    os.makedirs(OUT_DIR, exist_ok=True)
 
     def run_batch(items, out_prefix):
+        os.makedirs(OUT_DIR, exist_ok=True)
         n = 0
         for doc_id, text in items:
             if args.limit and n >= args.limit:
                 break
             m = extract_metrics(text, doc_id)
+            if not m["chars"]:
+                print(f"[warn] 跳过空文本：{doc_id}", file=sys.stderr)
+                continue
             safe = re.sub(r"[^\w\u4e00-\u9fa5-]", "_", doc_id)[:60]
             with open(f"{OUT_DIR}/{out_prefix}_{safe}.json", "w", encoding="utf-8") as f:
                 json.dump(m, f, ensure_ascii=False)
@@ -360,6 +356,8 @@ def main() -> None:
     raw = open(args.file, encoding="utf-8").read()
     doc_id = os.path.splitext(os.path.basename(args.file))[0]
     res = extract_metrics(raw, doc_id)
+    if not res["chars"]:
+        sys.exit(f"错误：{args.file} 是空文本（去空白后 0 字），无法提取指纹")
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return
