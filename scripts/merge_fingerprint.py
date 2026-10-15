@@ -15,33 +15,22 @@ import argparse
 import json
 import statistics
 
-# 参与 Delta 计算的标量特征（全部来自已核验的 L1/L2/L4 硬指标）
-SCALAR_FEATURES = [
-    "L1_LEX_001_ttr_char", "L1_LEX_001_sttr100", "L1_LEX_002_ttr_word",
-    "L1_LEX_006_wo_ni_ratio", "L1_LEX_007_pos_per_k", "L1_LEX_007_neg_per_k",
-    "L1_SYN_001_avg_sl", "L1_SYN_002_sd_sl", "L1_SYN_002_med_sl",
-    "L1_SYN_002_short_lt10", "L1_SYN_002_long_gt40",
-    "L1_SYN_004_question_sents", "L1_SYN_004_rhet_sents",
-    "L1_SYN_005_ba_per_k", "L1_SYN_005_bei_per_k", "L1_SYN_005_rang_per_k",
-    "L1_SYN_005_shi_de_per_k", "L1_SYN_006_fourchar_per_k",
-    "L1_SYN_007_burstiness",
-    "L2_DIS_001_paras", "L2_DIS_001_avg_para_len",
-    "L2_DIS_003_pron_per_sent",
-    "L4_SUR_001_meta_per_k", "L4_SUR_002_value_per_k",
-    "L4_SUR_003_pos_per_k", "L4_SUR_003_neg_per_k", "L4_SUR_003_pos_neg_ratio",
-    # 派生标量（v0.4.1：嵌套字段聚合，纳入 Delta 池）
-    "L1_LEX_004_yqci_total_per_k", "L2_DIS_002_conn_total_per_k",
-    "L4_SUR_001_meta_top1_pct",
-]
+# 参与 Delta 计算的标量特征：统一从 field_map 读，禁止各自维护
+from field_map import SCALAR_FIELDS, DICT_TO_TOTAL, EXCLUDE_FIELDS, DUPLICATE_FIELDS
+SCALAR_FEATURES = list(SCALAR_FIELDS.keys())
+# 字典展开后的 *_total 也纳入 Delta
+for orig, total in DICT_TO_TOTAL.items():
+    if total not in SCALAR_FEATURES:
+        SCALAR_FEATURES.append(total)
 
 
 def derive(fp: dict) -> dict:
     """从嵌套字段派生标量（操作化口径）：语气词/衔接词总和、根域 Top1 占比。"""
     out = {}
     yq = fp.get("L1_LEX_004_yqci_per_k", {})
-    out["L1_LEX_004_yqci_total_per_k"] = round(sum(yq.values()), 3) if yq else 0.0
+    out["L1_LEX_004_yqci_per_k_total"] = round(sum(yq.values()), 3) if yq else 0.0
     conn = fp.get("L2_DIS_002_conn_per_k", {})
-    out["L2_DIS_002_conn_total_per_k"] = round(sum(conn.values()), 3) if conn else 0.0
+    out["L2_DIS_002_conn_per_k_total"] = round(sum(conn.values()), 3) if conn else 0.0
     md = fp.get("L4_SUR_001_meta_domains", {})
     if md and sum(md.values()) > 0:
         top = max(md.values())

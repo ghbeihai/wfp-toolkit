@@ -58,6 +58,7 @@ def calc_delta(fp: dict, baseline: dict, avg_chars_override: int = None) -> floa
         if isinstance(v, dict):
             if k in DICT_FEATURES:
                 v = sum(x for x in v.values() if isinstance(x, (int, float)))
+                k = DICT_FEATURES[k]  # 键名改成 *_total，和基线对齐
             else:
                 continue
         if not isinstance(v, (int, float)):

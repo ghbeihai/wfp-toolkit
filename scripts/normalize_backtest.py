@@ -93,6 +93,11 @@ def calc_delta(gen_norm: dict, baseline: dict, avg_chars_override: int = None) -
             mean = bl_v
             sd = 0
 
+        # 按篇特征：基线是每篇，需要换算成每千字再对比
+        if k in PER_DOC:
+            mean = mean * 1000 / avg_chars
+            sd = sd * 1000 / avg_chars
+
         if sd > 0:
             deltas[k] = abs(gen_v - mean) / sd
             matched.append(k)
