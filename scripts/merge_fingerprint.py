@@ -15,7 +15,9 @@ import argparse
 import json
 
 # 参与 Delta 计算的特征与口径：统一从 field_map 读，禁止各自维护
-from field_map import delta_features, flatten, delta as fm_delta
+import sys
+
+from field_map import delta_features, flatten, delta as fm_delta, check_baseline, DegenerateBaseline, EmptyText
 SCALAR_FEATURES = delta_features()
 
 
@@ -78,10 +80,17 @@ def main():
     args = ap.parse_args()
 
     baseline = load_baseline(args.baseline)
+    try:
+        check_baseline(baseline)
+    except DegenerateBaseline as e:
+        sys.exit(f"错误：{e}")
     out = []
     for f in args.files:
         fp = json.load(open(f, encoding="utf-8"))
-        d = delta(fp, baseline)
+        try:
+            d = delta(fp, baseline)
+        except EmptyText as e:
+            sys.exit(f"错误：{f}: {e}")
         item = {"file": f, "summary": summary(fp), "delta": d["delta"],
                 "n_features": d["n"], "zs": d["zs"]}
         l3 = load_l3(fp.get("doc_id", ""), args.l3dir)

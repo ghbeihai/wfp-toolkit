@@ -95,6 +95,11 @@ MIN_BASELINE_DOCS = 5        # 基线最少篇数（低于此 sd 不可信）
 MIN_DELTA_FEATURES = 10      # 可用（sd>0）特征最少个数
 
 
+def weight(key: str) -> float:
+    """Delta 中该特征的权重（相关特征组降权）。"""
+    return _WEIGHT.get(key, 1.0)
+
+
 class DegenerateBaseline(ValueError):
     """基线退化（篇数太少 / sd 全 0 / 可用特征太少），Delta 不可信。"""
 

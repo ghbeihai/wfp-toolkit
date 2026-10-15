@@ -8,7 +8,9 @@
 """
 import argparse
 import json
-from field_map import flatten, baseline_stat  # 唯一口径实现
+import sys
+
+from field_map import flatten, baseline_stat, weight, check_baseline, DegenerateBaseline, EmptyText  # 唯一口径实现
 
 
 
@@ -29,7 +31,8 @@ def calc_delta(gen_norm: dict, baseline: dict, avg_chars_override: int = None) -
             continue
         deltas[k] = abs(gen_v - st[0]) / st[1]
     matched = list(deltas)
-    avg = sum(deltas.values()) / len(matched) if matched else 0
+    wsum = sum(weight(k) for k in matched)
+    avg = sum(v * weight(k) for k, v in deltas.items()) / wsum if matched else 0  # 与 field_map.delta 同权重
     return {
         "delta": round(avg, 3),
         "n_features": len(matched),
@@ -50,7 +53,11 @@ def main():
     gen = json.load(open(args.gen_fp, encoding="utf-8"))
     bl = json.load(open(args.baseline, encoding="utf-8"))
 
-    gen_norm = flatten_fp(gen)
+    try:
+        check_baseline(bl)
+        gen_norm = flatten_fp(gen)
+    except (DegenerateBaseline, EmptyText) as e:
+        sys.exit(f"错误：{e}")
     result = calc_delta(gen_norm, bl, args.avg_chars)
 
     if args.json:
