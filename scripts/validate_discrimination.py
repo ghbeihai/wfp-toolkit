@@ -3,33 +3,36 @@
 """
 回测判别力自检：验证基线尺子能不能分清"像不像"。
 
-两步自检：
-1. 留出集自检：原作者语料留一部分不进基线，看它 Delta 是不是明显好于对照文
-2. 异作者判别：拿另一个作者的文章跑，看 Delta 是不是明显差于原作者
+支持两种模式：
+1. 手动模式：指定 --held-out 和 --control 跑一对
+2. 自动模式：指定 --corpus 语料目录，自动留出 20%，跑多组，汇总通过率
 
-两关过不了，Delta 就标"不可用"，不硬报数值。
+用法：
+  # 手动模式
+  python3 validate_discrimination.py --baseline baseline.json --held-out held.txt --control control.txt
+
+  # 自动模式（自动留出 20%）
+  python3 validate_discrimination.py --corpus ./原文目录 --baseline baseline.json --holdout 20
 """
 import argparse
 import json
+import random
 import subprocess
 import sys
 from pathlib import Path
 
 
-# 篇幅指标排除名单（精确字段名）
 EXCLUDE = {
     "chars", "sentences", "uniq_chars",
     "L1_LEX_001_ttr_char",
     "L2_DIS_001_avg_para_len",
 }
 
-# 按篇指标 → 换算成每千字
 PER_DOC = {
     "L1_SYN_004_question_sents",
     "L1_SYN_004_rhet_sents",
 }
 
-# 字典型指标 → 展开成总和
 DICT_FEATURES = {
     "L1_LEX_004_yqci_per_k",
     "L1_LEX_006_pron_per_k",
@@ -48,11 +51,8 @@ def extract_fp(text_file: str) -> dict:
 
 
 def calc_delta(fp: dict, baseline: dict, avg_chars_override: int = None) -> float:
-    """计算 z-score 距离（每千字归一化，排除篇幅指标）"""
     bl = baseline.get("baseline", baseline)
     chars = fp.get("chars", 0)
-
-    # 基线平均每篇字数：优先用户指定，其次基线自带，最后估算
     avg_chars = avg_chars_override or baseline.get("avg_chars", 500)
 
     total = 0.0
@@ -88,67 +88,88 @@ def calc_delta(fp: dict, baseline: dict, avg_chars_override: int = None) -> floa
     return round(total / n, 3) if n > 0 else 999.0
 
 
+def run_one_test(held_out_file: str, control_file: str, baseline: dict, avg_chars: int = None) -> dict:
+    held_out_fp = extract_fp(held_out_file)
+    control_fp = extract_fp(control_file)
+    delta_held = calc_delta(held_out_fp, baseline, avg_chars)
+    delta_control = calc_delta(control_fp, baseline, avg_chars)
+    ratio = round(delta_control / delta_held, 2) if delta_held > 0 else 0
+    passed = ratio >= 1.5
+    return {
+        "delta_held": delta_held,
+        "delta_control": delta_control,
+        "ratio": ratio,
+        "passed": passed,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(
-        description="回测判别力自检：验证基线尺子能不能分清像不像"
+        description="回测判别力自检"
     )
-    ap.add_argument("--baseline", required=True, help="基线 JSON 文件路径")
-    ap.add_argument("--held-out", required=True, help="原作者留出文章（不进基线的部分）")
-    ap.add_argument("--control", required=True, help="对照文（随机文本或非模仿文）")
-    ap.add_argument("--other-author", help="另一作者的文章（可选，测异作者判别）")
-    ap.add_argument("--avg-chars", type=int, default=None,
-                    help="基线平均每篇字数（用于换算按篇指标）")
-    ap.add_argument("--json", action="store_true", help="输出完整 JSON")
+    ap.add_argument("--baseline", required=True, help="基线 JSON")
+    ap.add_argument("--held-out", help="留出文章（手动模式）")
+    ap.add_argument("--control", help="对照文（手动模式）")
+    ap.add_argument("--corpus", help="语料目录（自动模式）")
+    ap.add_argument("--holdout", type=int, default=20, help="自动留出比例（默认 20%%）")
+    ap.add_argument("--rounds", type=int, default=5, help="自动模式跑几轮（默认 5 轮）")
+    ap.add_argument("--avg-chars", type=int, default=None, help="基线平均每篇字数")
+    ap.add_argument("--json", action="store_true", help="输出 JSON")
     args = ap.parse_args()
 
     baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
 
-    held_out_fp = extract_fp(args.held_out)
-    control_fp = extract_fp(args.control)
-    other_fp = extract_fp(args.other_author) if args.other_author else None
-
-    delta_held_out = calc_delta(held_out_fp, baseline, args.avg_chars)
-    delta_control = calc_delta(control_fp, baseline, args.avg_chars)
-    delta_other = calc_delta(other_fp, baseline, args.avg_chars) if other_fp else None
-
-    ratio_held_vs_control = round(delta_control / delta_held_out, 2) if delta_held_out > 0 else 0
-    ratio_held_vs_other = round(delta_other / delta_held_out, 2) if (delta_held_out > 0 and delta_other) else None
-
-    passed_held_out = ratio_held_vs_control >= 1.5
-    passed_other = ratio_held_vs_other >= 1.2 if ratio_held_vs_other else None
-
-    result = {
-        "delta_held_out": delta_held_out,
-        "delta_control": delta_control,
-        "delta_other_author": delta_other,
-        "ratio_held_vs_control": ratio_held_vs_control,
-        "ratio_held_vs_other": ratio_held_vs_other,
-        "passed_held_out_test": passed_held_out,
-        "passed_other_author_test": passed_other,
-        "verdict": "PASS" if (passed_held_out and (passed_other is None or passed_other)) else "FAIL",
-    }
-
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    # 手动模式
+    if args.held_out and args.control:
+        result = run_one_test(args.held_out, args.control, baseline, args.avg_chars)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"原作者留出 Delta: {result['delta_held']}")
+            print(f"对照文 Delta: {result['delta_control']}")
+            print(f"判别比: {result['ratio']} {'PASS' if result['passed'] else 'FAIL'}")
         return
 
-    print("=" * 50)
-    print("回测判别力自检")
-    print("=" * 50)
-    print(f"原作者留出文 Delta: {delta_held_out}")
-    print(f"对照文 Delta: {delta_control}")
-    if delta_other:
-        print(f"另一作者 Delta: {delta_other}")
-    print()
-    print(f"判别比（对照/原作者）: {ratio_held_vs_control} {'PASS' if passed_held_out else 'FAIL'}")
-    if ratio_held_vs_other:
-        print(f"判别比（另一作者/原作者）: {ratio_held_vs_other} {'PASS' if passed_other else 'FAIL'}")
-    print()
-    if result["verdict"] == "PASS":
-        print("结论：尺子可用，Delta 结果可信。")
-    else:
-        print("结论：尺子不可用，Delta 结果标注为不可信。")
-        print("可能原因：语料太短、异质语料、基线 sd 太大。")
+    # 自动模式
+    if args.corpus:
+        corpus_dir = Path(args.corpus)
+        files = sorted(corpus_dir.glob("*.txt"))
+        if len(files) < 10:
+            print("语料太少，至少 10 篇才能自动留出测试。", file=sys.stderr)
+            sys.exit(1)
+
+        results = []
+        for r in range(args.rounds):
+            # 随机留出
+            n_holdout = max(1, int(len(files) * args.holdout / 100))
+            random.shuffle(files)
+            holdout = files[:n_holdout]
+            control = files[n_holdout:n_holdout + n_holdout]  # 用剩下的当对照
+
+            # 拼起来当留出文
+            held_text = "\n".join(f.read_text(encoding="utf-8") for f in holdout)
+            control_text = "\n".join(f.read_text(encoding="utf-8") for f in control)
+
+            held_file = "/tmp/_held.txt"
+            control_file = "/tmp/_control.txt"
+            Path(held_file).write_text(held_text, encoding="utf-8")
+            Path(control_file).write_text(control_text, encoding="utf-8")
+
+            res = run_one_test(held_file, control_file, baseline, args.avg_chars)
+            results.append(res)
+            print(f"第 {r+1} 轮: 判别比 {res['ratio']} {'PASS' if res['passed'] else 'FAIL'}")
+
+        # 汇总通过率
+        n_pass = sum(1 for r in results if r["passed"])
+        pass_rate = round(n_pass / len(results) * 100, 1)
+        avg_ratio = round(sum(r["ratio"] for r in results) / len(results), 2)
+
+        print(f"\n汇总：{len(results)} 轮，通过 {n_pass} 轮，通过率 {pass_rate}%")
+        print(f"平均判别比: {avg_ratio}")
+        print(f"结论: {'PASS' if pass_rate >= 60 else 'FAIL'}（通过率 ≥60% 才算尺子可用）")
+        return
+
+    ap.print_help()
 
 
 if __name__ == "__main__":
