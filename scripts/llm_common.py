@@ -84,11 +84,16 @@ def require_key(repo_root=None) -> str:
     return key
 
 
-def load_llm_cfg(path: Path | str | None) -> dict:
+def load_llm_cfg(path: Path | str | None, section: str | None = None) -> dict:
+    """读 YAML（可指定子节，如 SPI models.yaml 的 llm:），缺省键用 DEFAULTS 补齐。"""
     cfg = dict(DEFAULTS)
     if path and Path(path).exists():
         import yaml
         user = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        if section:
+            user = user.get(section) or {}
+        if "timeout" not in user and "timeout_seconds" in user:
+            user["timeout"] = user["timeout_seconds"]
         # 兼容旧键：rounds: [0.3, 0.7] 视为 temperatures
         if "temperatures" not in user and isinstance(user.get("rounds"), list):
             user["temperatures"] = user["rounds"]
