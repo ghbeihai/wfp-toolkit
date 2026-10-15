@@ -104,7 +104,7 @@ def split_sentences(text: str) -> list:
 
 
 def split_paragraphs(raw: str) -> list:
-    paras = [re.sub(r"\s+", "", p).strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
+    paras = [re.sub(r"\s+", "", p).strip() for p in re.split(r"\n", raw) if p.strip()]
     return [p for p in paras if p]
 
 
@@ -348,7 +348,8 @@ def main() -> None:
         ap.error("需要 <file> 或 --corpus-spi / --corpus-aot")
 
     raw = open(args.file, encoding="utf-8").read()
-    res = extract_metrics(raw)
+    doc_id = os.path.splitext(os.path.basename(args.file))[0]
+    res = extract_metrics(raw, doc_id)
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return

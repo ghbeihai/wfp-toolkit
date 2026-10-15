@@ -13,6 +13,9 @@ import sys
 
 # 篇幅指标排除名单
 EXCLUDE = {
+    # 排除重复字段（L1 和 L4 重复的情感词）
+    "L4_SUR_001_pos_per_k",
+    "L4_SUR_001_neg_per_k",
     "chars", "sentences", "uniq_chars",
     "L1_LEX_001_ttr_char",
     "L2_DIS_001_avg_para_len",
@@ -32,6 +35,13 @@ DICT_FEATURES = {
 
 
 def flatten_fp(fp: dict) -> dict:
+    """我:你比例截断：限制在 0.1 - 10 之间，防止分母小爆炸"""
+    if "L1_LEX_006_wo_ni_ratio" in fp:
+        v = fp["L1_LEX_006_wo_ni_ratio"]
+        fp["L1_LEX_006_wo_ni_ratio"] = max(0.1, min(v, 10.0))
+    return _flatten_fp_impl(fp)
+
+def _flatten_fp_impl(fp: dict) -> dict:
     """把指纹拍平成标量字典"""
     chars = fp.get("chars", 0)
     result = {}
