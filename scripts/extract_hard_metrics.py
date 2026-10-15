@@ -35,6 +35,7 @@ import json
 import os
 import re
 import statistics
+import sys
 from collections import Counter
 
 PUNCT_ORDER = ["，", "。", "！", "？", "、", "；", "：", "——", "……", "“", "”"]
@@ -108,6 +109,9 @@ def split_paragraphs(raw: str) -> list:
     return [p for p in paras if p]
 
 
+_JIEBA_WARNED = False
+
+
 def per_k(chars: int, n: int) -> float:
     return round(n * 1000.0 / max(chars, 1), 3)
 
@@ -120,11 +124,10 @@ def sttr(text: str, window: int = 100, step: int = 50) -> float:
         w = text[i:i + window]
         vals.append(len(set(w)) / window)
         i += step
-    return round(statistics.mean(vals), 4) if vals else 0.0
+    return round(statistics.mean(vals), 4) if vals else None  # 不足一个窗口：无法计算
 
 
 def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
-    raw = raw_text
     text = clean_text(raw_text)
     paras = split_paragraphs(raw_text)
     sents = split_sentences(text)
@@ -137,22 +140,28 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
     # 词级（jieba 可选）
     ttr_word = None
     top_words = []
+    words = None  # 无 jieba 时为 None：依赖分词的指标输出 None，而不是静默 0
     try:
         import jieba
+    except ImportError:
+        global _JIEBA_WARNED
+        if not _JIEBA_WARNED:
+            print("[warn] 未安装 jieba：词TTR/四字格 输出 None（pip install jieba）", file=sys.stderr)
+            _JIEBA_WARNED = True
+    else:
         words = [w for w in jieba.cut(text) if w.strip() and w not in PUNCT_ORDER]
-        ttr_word = round(len(set(words)) / max(len(words), 1), 4)
+        if words:
+            ttr_word = round(len(set(words)) / len(words), 4)
         top_words = Counter(words).most_common(50)
-    except Exception:
-        pass
 
     slen = [len(s) for s in sents]
-    avg_sl = round(statistics.mean(slen), 2) if slen else 0.0
+    avg_sl = round(statistics.mean(slen), 2) if slen else None
     sd_sl = round(statistics.pstdev(slen), 2) if len(slen) > 1 else 0.0
     # L1_SYN_007 burstiness 句长变异系数（CV=sd/mean）：人类文本通常 >0.5，机器文本 <0.3
-    burstiness = round(sd_sl / avg_sl, 4) if avg_sl > 0 else 0.0
+    burstiness = round(sd_sl / avg_sl, 4) if avg_sl else None
     short_pct = round(sum(1 for n in slen if n < 10) / max(len(slen), 1), 4)
     long_pct = round(sum(1 for n in slen if n > 40) / max(len(slen), 1), 4)
-    med_sl = round(statistics.median(slen), 2) if slen else 0.0
+    med_sl = round(statistics.median(slen), 2) if slen else None
 
     para_lens = [len(p) for p in paras]
     avg_pl = round(statistics.mean(para_lens), 2) if para_lens else 0.0
@@ -179,10 +188,7 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
 
     # 四字格密度（刘叔新 1990；操作化口径：jieba 分词 ∩ THUOCL 成语词表）
     _idioms = _load_idioms()
-    try:
-        four_char = sum(1 for w in words if w in _idioms)
-    except Exception:
-        four_char = 0
+    four_char = sum(1 for w in words if w in _idioms) if words is not None else None
 
     # 指代回指代理（Halliday & Hasan 1976；Ariel 1990；代词密度 + 句均代词）
     pronoun_total = sum(text.count(p) for p in PRONOUNS)
@@ -203,7 +209,8 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
         "L1_LEX_004_yqci_per_k": {y: per_k(chars, text.count(y)) for y in YQCI},
         "L1_LEX_005_dm": {m: text.count(m) for m in DISCOURSE_MARKERS},
         "L1_LEX_006_pron_per_k": {p: per_k(chars, text.count(p)) for p in PRONOUNS},
-        "L1_LEX_006_wo_ni_ratio": round((text.count("我") / max(text.count("你"), 1)), 3),
+        "L1_LEX_006_wo_ni_ratio": (round(text.count("我") / max(text.count("你"), 1), 3)
+                                   if (text.count("我") or text.count("你")) else None),
         "L1_LEX_007_pos_per_k": per_k(chars, pos_n),
         "L1_LEX_007_neg_per_k": per_k(chars, neg_n),
         "L1_LEX_008_cog_per_k": {w: per_k(chars, text.count(w)) for w in COGNITIVE_WORDS},
@@ -219,7 +226,7 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
         "L1_SYN_005_bei_per_k": per_k(chars, bei_sent),
         "L1_SYN_005_rang_per_k": per_k(chars, rang_sent),
         "L1_SYN_005_shi_de_per_k": per_k(chars, shi_de_sent),
-        "L1_SYN_006_fourchar_per_k": per_k(chars, four_char),
+        "L1_SYN_006_fourchar_per_k": per_k(chars, four_char) if four_char is not None else None,
         "L1_SYN_007_burstiness": burstiness,
         "L2_DIS_001_paras": len(paras),
         "L2_DIS_001_avg_para_len": avg_pl,
