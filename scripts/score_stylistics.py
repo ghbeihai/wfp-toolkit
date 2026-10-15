@@ -95,16 +95,19 @@ def load_key() -> Optional[str]:
 class StylisticScorer:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or load_key()
-        self.simulated = not self.api_key
-        self.client = None
-        if not self.simulated:
-            try:
-                from openai import OpenAI
-            except ImportError:
-                print("[warn] openai 未安装，尝试 pip install openai ...")
-                os.system(f"{os.sys.executable} -m pip install -q openai")
-                from openai import OpenAI
-            self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com", timeout=120)
+        if not self.api_key:
+            print("错误：未检测到 DEEPSEEK_API_KEY。\n"
+                  "请先 export DEEPSEEK_API_KEY=sk-... 或在 .env 文件中配置。",
+                  file=sys.stderr)
+            sys.exit(1)
+        self.simulated = False
+        try:
+            from openai import OpenAI
+        except ImportError:
+            print("[warn] openai 未安装，尝试 pip install openai ...")
+            os.system(f"{os.sys.executable} -m pip install -q openai")
+            from openai import OpenAI
+        self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com", timeout=120)
 
     def _call_once(self, definition: str, name: str, text: str, temperature: float) -> dict:
         user = (

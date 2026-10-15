@@ -12,7 +12,7 @@
 | L1 词汇 | 正/负情绪词密度、四字格密度、语气词、认知词、STTR 词汇多样性 | 语气词 ~11/千字 |
 | L2 语篇 | 衔接词密度、话语标记 | 衔接词密度 |
 | L3 软评分 | 17 维叙事/修辞/语域（需 LLM） | 评价/说理/引语/语域正式度 |
-| L4 隐喻 | 12 根域密度（亲情/权力/旅程…） | 隐喻 ~3/千字 |
+| L4 隐喻 | 12 根域密度（旅程/战争/建筑/生命…，DeepSeek 语境识别） | 隐喻 ~3/千字 |
 
 ## 快速开始
 
@@ -28,17 +28,19 @@ python3 scripts/merge_fingerprint.py 生成文指纹.json --baseline 基线.json
 
 # 4. L3 软评分（需 DeepSeek key，见下）
 python3 scripts/score_stylistics.py --source spi
+python3 scripts/score_metaphor.py 某篇文章.txt --json
 ```
 
 ## 环境变量
 
-- `DEEPSEEK_API_KEY`：L3 软评分的 LLM key。优先读环境变量，回退到 `.env` 文件。
-- 无 key 时自动进入**模拟模式**（结果带 `simulated: true`，仅用于流程验证，不可当真值）。
+- `DEEPSEEK_API_KEY`：L3 软评分 + L4 隐喻识别都需要。优先读环境变量，回退到 `.env` 文件。
+- **没 key 直接报错退出**（模拟模式已移除）；只有 L1/L2 纯规则硬指标（extract_hard_metrics.py）无需 key。
 
 ## 关键文件
 
-- `scripts/extract_hard_metrics.py` — 单文本硬指标提取（L1/L2/L4，无 LLM）
-- `scripts/score_stylistics.py` — L3 软评分（17 维，需 LLM）
+- `scripts/extract_hard_metrics.py` — 单文本硬指标提取（L1 句法/L2 语篇，纯规则无 LLM）
+- `scripts/score_stylistics.py` — L3 软评分（17 维叙事/修辞/语域，需 DeepSeek）
+- `scripts/score_metaphor.py` — L4 隐喻识别（12 根域，DeepSeek 语境识别，需 key）
 - `scripts/merge_fingerprint.py` — 生成文 vs 基线 Delta 回测
 - `config/l3_dimensions.yaml` — L3 17 维定义
 - `data/thuocl_chengyu.txt` — 四字格词表（8519 条，勿删）
