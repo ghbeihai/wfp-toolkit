@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """统一 LLM 工具：key 加载 / 配置 / 带退避重试的 JSON 调用。
 
-wfp-toolkit、aot-toolkit、spi-toolkit 各带一份相同实现（三个仓库互不 import）。
+wfp-toolkit、aot-toolkit、spi-toolkit 各带一份相同实现（三个仓库互不 import；源头 wfp-toolkit/scripts/llm_common.py）。
 
 key 查找顺序（第一个命中即用，load_key 返回 (key, 来源)）：
   1. 环境变量 DEEPSEEK_API_KEY
