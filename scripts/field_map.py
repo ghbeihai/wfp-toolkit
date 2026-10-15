@@ -22,7 +22,6 @@ SCALAR_FIELDS = {
     "L1_SYN_005_shi_de_per_k": "是...的/千字",
     # 词汇层
     "L1_LEX_001_sttr100": "STTR100",
-    "L1_LEX_002_ttr_word": "词TTR",
     "L1_LEX_007_pos_per_k": "正情/千字",
     "L1_LEX_007_neg_per_k": "负情/千字",
     "L1_SYN_006_fourchar_per_k": "四字格/千字",
@@ -60,6 +59,7 @@ COUNT_DICTS = {"L1_LEX_005_dm"}
 EXCLUDE_FIELDS = {
     "chars", "sentences", "uniq_chars", "doc_id", "L1_LEX_003_top50",
     "L1_LEX_001_ttr_char",      # 字TTR（篇幅相关）
+    "L1_LEX_002_ttr_word",      # 词TTR（篇幅相关：40 万字长文 0.07 vs 单篇 ~0.5；词汇丰富度改用 STTR100）
     "L2_DIS_001_avg_para_len",   # 平均段长（篇幅相关）
     "L2_DIS_001_sd_para_len",   # 段长标准差（篇幅相关）
     "L2_DIS_001_paras",          # 段落数（按篇计数，篇幅相关）
@@ -75,8 +75,32 @@ DUPLICATE_FIELDS = {
 }
 
 
-FIELD_MAP_VERSION = 2   # v2：dm/问句/修辞反问 统一每千字；paras、meta_domains_total 不参与 Delta
+FIELD_MAP_VERSION = 3
+# v2：dm/问句/修辞反问 统一每千字；paras、meta_domains_total 不参与 Delta
+# v3：词TTR 退出 Delta；我:你、正负情感比 改为 +1 平滑（零分母不再退化成原始计数）；
+#     句长簇降权；基线 sd 用样本标准差（n-1）
 WO_NI_CLIP = (0.1, 10.0)
+# v3 口径变化的字段：旧基线（field_map_version<3）里的值不可比，baseline_stat 直接跳过
+CHANGED_IN_V3 = {"L1_LEX_006_wo_ni_ratio", "L4_SUR_003_pos_neg_ratio"}
+
+# 高相关特征组降权：组内每个特征权重 = 组权重 / 组大小（其余特征权重 1）
+# 句长 6 项（均值/标准差/中位/短句/长句/CV）高度相关，原来等于给句长 6 票
+FEATURE_GROUPS = {
+    "sentence_length": (["L1_SYN_001_avg_sl", "L1_SYN_002_sd_sl", "L1_SYN_002_med_sl",
+                         "L1_SYN_002_short_lt10", "L1_SYN_002_long_gt40", "L1_SYN_007_burstiness"], 3.0),
+}
+_WEIGHT = {f: w / len(fs) for fs, w in FEATURE_GROUPS.values() for f in fs}
+
+MIN_BASELINE_DOCS = 5        # 基线最少篇数（低于此 sd 不可信）
+MIN_DELTA_FEATURES = 10      # 可用（sd>0）特征最少个数
+
+
+class DegenerateBaseline(ValueError):
+    """基线退化（篇数太少 / sd 全 0 / 可用特征太少），Delta 不可信。"""
+
+
+class EmptyText(ValueError):
+    """指纹来自空文本（chars==0），不能参与 Delta。"""
 
 
 def delta_features():
@@ -90,6 +114,8 @@ def delta_features():
 def flatten(fp: dict) -> dict:
     """单篇指纹 → Delta 特征向量（全部每千字/比率口径）。唯一实现，三个脚本共用。"""
     chars = fp.get("chars") or 0
+    if chars <= 0:
+        raise EmptyText(f"空文本（doc_id={fp.get('doc_id', '?')}，chars=0），不能计算指纹距离")
     out = {}
     for k in SCALAR_FIELDS:
         v = fp.get(k)
@@ -116,6 +142,8 @@ def flatten(fp: dict) -> dict:
 def baseline_stat(baseline: dict, key: str):
     """返回 (mean, sd)；兼容 v1 旧基线（按篇字段用 avg_chars 近似换算）。缺失返回 None。"""
     bl = baseline.get("baseline", baseline)
+    if key in CHANGED_IN_V3 and (baseline.get("field_map_version") or 1) < 3:
+        return None  # 旧基线该字段口径不同（未平滑），跳过
     b = bl.get(key)
     if isinstance(b, dict) and b.get("mean") is not None:
         return b["mean"], b.get("sd") or 0.0
@@ -129,8 +157,22 @@ def baseline_stat(baseline: dict, key: str):
     return None
 
 
+def check_baseline(baseline: dict, min_docs: int = MIN_BASELINE_DOCS,
+                   min_features: int = MIN_DELTA_FEATURES) -> int:
+    """基线退化检查：篇数 < min_docs 或 sd>0 的 Delta 特征 < min_features → DegenerateBaseline。
+    返回可用特征数。"""
+    n_docs = baseline.get("n_docs")
+    if isinstance(n_docs, int) and n_docs < min_docs:
+        raise DegenerateBaseline(f"基线仅 {n_docs} 篇（< {min_docs}），sd 不可信，Delta 无意义；请用 ≥{min_docs} 篇语料建基线")
+    usable = [k for k in delta_features() if (st := baseline_stat(baseline, k)) and st[1]]
+    if len(usable) < min_features:
+        raise DegenerateBaseline(f"基线可用特征仅 {len(usable)} 个（sd>0，需 ≥{min_features}），Delta 无意义")
+    return len(usable)
+
+
 def delta(fp: dict, baseline: dict, return_detail: bool = False):
-    """Burrows Delta：|z| 均值。fp 为原始指纹（未拍平）。sd==0 或缺失的特征跳过。"""
+    """Burrows Delta：加权 |z| 均值（相关特征组降权，见 FEATURE_GROUPS）。
+    fp 为原始指纹（未拍平）。sd==0 或缺失的特征跳过；空文本抛 EmptyText。"""
     vec = flatten(fp)
     zs = {}
     for k, x in vec.items():
@@ -138,11 +180,51 @@ def delta(fp: dict, baseline: dict, return_detail: bool = False):
         if not st or not st[1]:
             continue
         zs[k] = (x - st[0]) / st[1]
-    d = sum(abs(z) for z in zs.values()) / len(zs) if zs else None
+    wsum = sum(_WEIGHT.get(k, 1.0) for k in zs)
+    d = sum(abs(z) * _WEIGHT.get(k, 1.0) for k, z in zs.items()) / wsum if zs else None
     if return_detail:
         return {"delta": None if d is None else round(d, 4), "n": len(zs),
                 "zs": {k: round(v, 3) for k, v in zs.items()}}
     return d
+
+
+def aggregate_baseline(rows: list, name: str = "", min_docs: int = MIN_BASELINE_DOCS,
+                       version: str = "wfp-toolkit") -> dict:
+    """逐篇指纹 → 基线 JSON（唯一实现：replicate.py 与 extract_hard_metrics --summary 共用）。
+    - 收集所有行的数值字段（不只第一行）；字典字段展开 __子项 与 _total；
+    - Delta 口径字段由 flatten 生成（与回测/自检同口径）；
+    - sd 用样本标准差（n-1）；篇数 < min_docs 抛 DegenerateBaseline。"""
+    import statistics
+    rows = [r for r in rows if (r.get("chars") or 0) > 0]
+    if len(rows) < min_docs:
+        raise DegenerateBaseline(f"有效（非空）文档仅 {len(rows)} 篇（< {min_docs}），无法建可信基线")
+    flat_rows = []
+    for r in rows:
+        r = dict(r)
+        for k, v in list(r.items()):
+            if isinstance(v, dict):
+                for sk, sv in v.items():
+                    if isinstance(sv, (int, float)):
+                        r[f"{k}__{sk}"] = sv
+                r[f"{k}_total"] = sum(x for x in v.values() if isinstance(x, (int, float)))
+        r.update(flatten(r))
+        flat_rows.append(r)
+    keys = sorted({k for r in flat_rows for k, v in r.items()
+                   if isinstance(v, (int, float)) and not isinstance(v, bool)})
+    base = {}
+    for k in keys:
+        vals = [r[k] for r in flat_rows if isinstance(r.get(k), (int, float)) and not isinstance(r.get(k), bool)]
+        if vals:
+            base[k] = {"mean": round(statistics.mean(vals), 4),
+                       "sd": round(statistics.stdev(vals), 4) if len(vals) > 1 else 0.0,
+                       "n": len(vals)}
+    avg_chars = int(round(statistics.mean(r["chars"] for r in flat_rows)))
+    missing = [k for k in delta_features() if k not in base]
+    out = {"n_docs": len(flat_rows), "corpus": name, "version": version,
+           "avg_chars": avg_chars, "field_map_version": FIELD_MAP_VERSION,
+           "missing_features": missing, "baseline": base}
+    check_baseline(out, min_docs=min_docs)
+    return out
 
 
 def get_all_baseline_keys():
