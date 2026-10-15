@@ -1,0 +1,183 @@
+# WFP L3 软评分尺子（v0.3）—— 14 维判定设问 + 锚点词 + 正反锚
+# 判定协议复用 AoT（config/llm.yaml：双轮 temperature 0.3/0.7 取均值；证据句逐字引用 ≤3 条；confidence 0-1；1-7 刻度）
+# 低 1.0-2.49 / 中 2.5-4.49 / 高 4.5-7.0
+# 学术原则：question/keywords/essence/basis 来自 docs/L3软评分维度清单.md（文献可查证）；
+#   anchors 为操作化示例（工程定义，不冒充文献）；完整谱系见 docs/WFP学术基础研究.md
+module: WFP
+version: 0.3.0
+# 含 L2 soft 3 维（L2_DIS_004/005/006，篇章软判定）——依据 Daneš 1974 / Swales 1990 / Mann & Thompson 1988
+dimensions:
+  # ============ L2 篇章软判定（soft） ============
+  - id: L2_DIS_004
+    name: 主位推进模式
+    en: ThematicProgression
+    question: 他如何推进话题？句子/段落的主位（已知信息）与述位（新信息）是平行承接、延续推进还是派生展开？
+    keywords: [主位, 述位, 承接, 推进, 话题, 展开, 层层深入]
+    essence: 主位推进三大模式（平行/延续/派生）的分布
+    basis: Daneš 1974（主位推进理论，Papers on Functional Sentence Perspective）
+    anchors:
+      high: 段落内话题层层推进——后句承接前句新信息继续展开，形成清晰的推进链
+      low: 话题散点跳跃——各句各说各的，前后句之间缺少承接与递进
+  - id: L2_DIS_005
+    name: 开头/结尾功能
+    en: OpenCloseFunction
+    question: 他怎么开头？怎么收尾？开头是设问/断言/故事/场景/引用/数据？结尾是总结/呼吁/反问/金句？
+    keywords: [开头, 结尾, 设问, 断言, 故事, 场景, 引用, 数据, 总结, 呼吁, 金句]
+    essence: 首段 hook 类型与末段功能（Swales CARS 语步模型）
+    basis: Swales 1990 Genre Analysis（CARS 语步模型）
+    anchors:
+      high: 开头有明显 hook（设问/故事/断言吸引读者），结尾有明确功能（总结/呼吁/金句收束）
+      low: 开头平铺直叙无钩子，结尾戛然而止或无明显收束功能
+  - id: L2_DIS_006
+    name: 信息顺序
+    en: InfoOrder
+    question: 他是先给结论再论证，还是先铺垫最后给结论？核心信息放在哪个位置？
+    keywords: [先结论, 后结论, 铺垫, 论证, 核心信息, 顺序, 倒装]
+    essence: 先结论后论证 vs 先铺垫后结论（RST 核心-卫星结构）
+    basis: Mann & Thompson 1988 Rhetorical Structure Theory（核心-卫星，Text 8(3):243-281，已核验）
+    anchors:
+      high: 顺序特征鲜明——或开门见山先抛结论再展开论证（结论先行），或层层铺垫最后收束到核心判断（铺垫后置）
+      low: 顺序无明显特征，核心信息位置随意，论证与结论交织无固定模式
+  # ============ 叙事层（怎么讲） ============
+  - id: L3_NAR_001
+    name: 叙述者与视角
+    en: NarratorFocalization
+    question: 他习惯以什么人称/位置叙述？是亲历者、旁观者还是全知视角？叙述声音是否可靠、权威？
+    keywords: [第一人称, 全知视角, 内聚焦, 旁观, 叙述声音, 可靠叙述, 不可靠叙述]
+    essence: 叙述者身份与聚焦类型（零/内/外），叙述声音的介入程度与可靠性
+    basis: Genette 1972/1980 Narrative Discourse; Booth 1961 The Rhetoric of Fiction
+    anchors:
+      high: 叙述者频繁以“我”亲历视角讲述自己的经历与感受，语气自信、权威，直接向读者下判断
+      low: 叙述尽量抽离个人，以旁观者或资料转述方式呈现信息，很少表露个人在场
+  - id: L3_NAR_002
+    name: 叙述距离
+    en: NarrativeDistance
+    question: 叙述者与读者/人物的距离是近是远？是否用自由间接引语进入人物内心？
+    keywords: [叙述距离, 自由间接引语, 内心独白, 旁观, 代入, 共情]
+    essence: 叙述距离远近；自由间接引语造成的「内心化」程度
+    basis: Genette; Cohn 1978 Transparent Minds; Fludernik 1993
+    anchors:
+      high: 叙述紧贴人物或读者内心，频繁进入“你想”“你心里”层面的共情与代入
+      low: 叙述保持距离，只讲事实与道理，不进入任何人的内心
+  - id: L3_NAR_003
+    name: 时间结构
+    en: NarrativeTime
+    question: 叙述按什么时间顺序展开？是否倒叙/插叙？详略节奏如何（场景/概要/停顿）？
+    keywords: [倒叙, 插叙, 顺叙, 场景化, 概要, 节奏, 详略]
+    essence: 时序（顺/倒/插）、时距（场景 vs 概要 vs 停顿）、频率
+    basis: Genette 叙事时间（order/duration/frequency）
+    anchors:
+      high: 有明确时间调度，或场景化展开细节，或倒叙/插叙制造悬念，节奏有详略变化
+      low: 平铺直叙、单一时间线推进，各段详略几乎无差别
+  - id: L3_NAR_004
+    name: 引语呈现方式
+    en: SpeechPresentation
+    question: 他如何呈现他人话语？多用直接引语、间接引语还是自由间接引语？
+    keywords: [直接引语, 间接引语, 自由间接引语, 转述, 原话]
+    essence: 话语呈现五级标尺（直接引语 → 间接引语）的分布偏好
+    basis: Leech & Short 2007 Style in Fiction 2nd ed.（话语呈现五级标尺）
+    anchors:
+      high: 大量直接引用原话或典型说法（“他说……”“大家都说……”），引语在文本中占据显著位置
+      low: 几乎不引他人话语，只用概括性转述或完全自述
+  # ============ 修辞层（怎么说服） ============
+  - id: L3_RHT_001
+    name: 说服三诉求
+    en: EthosPathosLogos
+    question: 他的说服主要靠什么？个人可信度（ethos）、情感共鸣（pathos）还是逻辑论证（logos）？
+    keywords: [可信度, 情感, 逻辑, 诉诸权威, 诉诸共情, 诉诸数据]
+    essence: 三诉求的相对强度与主导模式
+    basis: 亚里士多德《修辞学》
+    anchors:
+      high: 说服高度依赖某单一诉求——如反复标榜个人资历经验（ethos），或反复调动恐惧/希望（pathos），或以数据逻辑层层推演（logos）
+      low: 诉求混杂且弱，几乎不建立可信度、不调动情感、也不做系统论证
+  - id: L3_RHT_002
+    name: 论证结构与论据类型
+    en: ArgumentationEvidence
+    question: 他怎么支撑观点？用什么类型论据（数据/权威/经验/故事/常识）？归纳还是演绎？
+    keywords: [数据, 权威引用, 亲身经历, 案例故事, 归纳, 演绎, 类比]
+    essence: 论证图式与论据来源偏好
+    basis: Walton, Reed & Macagno 2008 Argumentation Schemes; Toulmin 1958 The Uses of Argument
+    anchors:
+      high: 观点有系统支撑：明确论据类型（数据/案例/权威）且论证层次清楚（先例证后结论或先结论后论证）
+      low: 多为断言式表达，观点直接给出，缺乏论据与论证过程
+  - id: L3_RHT_003
+    name: 修辞格类型分布
+    en: RhetoricalFigures
+    question: 他偏爱哪些修辞格？比喻/拟人/排比/反问/设问/夸张/对偶/反复 的分布如何？
+    keywords: [比喻, 拟人, 排比, 反问, 设问, 夸张, 对偶, 反复]
+    essence: 修辞格使用偏好与密度
+    basis: Leech & Short 2007; 陈望道《修辞学发凡》1932
+    anchors:
+      high: 修辞格密集且类型突出——如频繁打比方、排比句成串、反复强调核心说法
+      low: 修辞格罕见，表达直白，几乎不用形象化语言
+  - id: L3_RHT_004
+    name: 说理模式
+    en: ReasoningMode
+    question: 他从哪里长出道理？先讲具体人事再点道理，还是先给结论再论证？
+    keywords: [从故事生发, 小切口, 先结论, 先铺垫, 举例驱动, 道理收束]
+    essence: 案例先行 vs 抽象说理；例证驱动 vs 演绎驱动
+    basis: Green & Brock 2000（叙事传输理论，JPSP 79(5)，已核验）; 叙事修辞研究
+    anchors:
+      high: 典型“从具体人事生发”：先讲一个案例/故事，再从中收束出道理（案例先行）
+      low: 典型“先结论后论证”：开门见山下判断，再用抽象理由说明（结论先行）
+  - id: L3_RHT_005
+    name: 情绪唤起路径
+    en: EmotionalAppealPath
+    question: 他主要唤起哪种情绪来推动读者？恐惧/希望/温暖/愤怒/共情？
+    keywords: [制造恐慌, 给期待, 温暖, 共情, 激愤, 希望]
+    essence: 情绪调动的目标情绪与强度策略
+    basis: Witte 1992（扩展平行过程模型 EPPM，Communication Monographs 59(4):329，已核验）
+    anchors:
+      high: 情绪唤起意图明显且路径单一——如反复渲染后果可怕（恐惧），或反复许诺好处（希望/期待）
+      low: 情绪唤起弱，行文中性平实，不以情绪推动读者
+  # ============ 姿态层（什么姿态） ============
+  - id: L3_STA_001
+    name: 评价态度
+    en: Appraisal
+    question: 他对人/事/观点的态度如何分布？情感/判断/鉴赏三个系统的极性？
+    keywords: [褒贬, 评价词, 态度, 判断, 鉴赏]
+    essence: 评价理论三系统（affect/judgment/appreciation）的分布与极性
+    basis: Martin & White 2005 The Language of Evaluation（Appraisal framework）
+    anchors:
+      high: 评价密集且极性鲜明——频繁对人/事下褒贬判断，态度旗帜鲜明
+      low: 极少评价，行文以陈述事实为主，态度中性含糊
+  - id: L3_STA_002
+    name: 情态系统
+    en: Modality
+    question: 他说话多确定？多用「肯定/绝对」还是「可能/或许/应该」？
+    keywords: [肯定, 绝对, 可能, 或许, 应该, 必须, 笃定度]
+    essence: 认知情态（确定性）与道义情态（义务性）的强度与笃定度
+    basis: Halliday 系统功能语言学情态; Palmer 2001 Mood and Modality 2nd ed.
+    anchors:
+      high: 情态笃定——多用“一定/绝对/必须/肯定”，很少留余地
+      low: 情态犹疑——多用“可能/或许/大概/我觉得也许”，大量留余地
+  - id: L3_STA_003
+    name: 读者互动与元话语
+    en: EngagementMetadiscourse
+    question: 他是否直接称呼读者、抛问句、给建议？互动元话语标记（你看/你想想/我们来看）多不多？
+    keywords: [直接称呼, 你看, 你想想, 我们来看, 互动问句, 建议, 命令]
+    essence: 读者互动强度（Hyland 互动元话语：称呼、命令、互动问句）
+    basis: Hyland 2005 Metadiscourse（互动元话语）; 互动语言学
+    anchors:
+      high: 高频直接互动——频繁称呼“你/咱们”、抛问句“是不是/对不对”、给建议“你要记住”
+      low: 单向陈述，不称呼读者、不抛问句、不直接给建议
+  - id: L3_STA_004
+    name: 姿态基调
+    en: StanceTone
+    question: 整体姿态更偏权威还是平等？自信还是谦逊？幽默还是严肃？煽情还是克制？
+    keywords: [权威, 平等, 自信, 谦逊, 自嘲, 幽默, 煽情, 克制]
+    essence: 四对极轴（权威/平等、自信/谦逊、幽默/严肃、煽情/克制）的取值
+    basis: Biber & Finegan 1989（立场风格，Text 9(1):93-124，已核验）; Du Bois 2007（立场三角，已核验）
+    anchors:
+      high: 姿态极端鲜明——如处处以权威口吻教导（权威），或全程插科打诨（幽默），或情绪浓烈（煽情）
+      low: 姿态模糊中性，无明显基调，权威/幽默/煽情均弱
+  - id: L3_STA_005
+    name: 语域正式度
+    en: RegisterFormality
+    question: 语言偏书面还是口语？正式还是亲民？是否出现口语词/主持腔/播音腔？
+    keywords: [书面语, 口语化, 大白话, 主持腔, 播音腔, 正式, 亲民]
+    essence: 语域正式度连续统（书面-口语、正式-亲民）
+    basis: Biber & Conrad 2009 Register, Genre, and Style; Biber 1988 Variation Across Speech and Writing
+    anchors:
+      high: 高度口语化/亲民——大量语气词、口头禅、大白话，像面对面聊天
+      low: 高度书面化/正式——书面词、长句、官方腔，像公文或新闻稿

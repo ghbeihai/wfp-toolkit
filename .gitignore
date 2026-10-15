@@ -1,0 +1,10 @@
+.env
+*.key
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# 本地运行产物
+data/corpus/
+data/results/

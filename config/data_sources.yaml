@@ -1,0 +1,19 @@
+# WFP 数据源配置（v0.4.20 架构重构）
+# 原则：WFP 是纯测量端，只依赖"语料数据源"与"评分协议"，不硬编码其他模块路径。
+# 修改此处后重跑基线即可生效；CLI 参数（--spi-path / --aot-dir）可覆盖。
+
+corpus:
+  spi_articles: <SPI_ROOT>/data/results/<obj>_profiles/<obj>_articles_clean.json
+  aot_dir: <AoT_ROOT>/data/corpus_full/
+
+llm:
+  # L3 软评分协议复用 AoT 已验证协议（仅协议对齐，不 import AoT 代码）
+  env_path: <AoT_ROOT>/.env
+  provider: deepseek
+  rounds: [0.3, 0.7]
+  evidence_max: 3
+
+# L4 隐喻根域词元：根域名冻结自 AoT尺子_v1.0 维度6（12 根域），词元为 WFP 内嵌工程口径
+# （见 docs/WFP学术基础研究.md 第 8 章），不随 AoT 变更。
+metaphor:
+  source_note: "AoT尺子_v1.0 维度6 12 根域（冻结），词元内嵌于 extract_hard_metrics.py"
