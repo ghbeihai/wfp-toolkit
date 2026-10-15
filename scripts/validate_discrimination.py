@@ -36,6 +36,14 @@ PER_DOC = {
 DICT_FEATURES = {
     "L1_LEX_004_yqci_per_k",
     "L1_LEX_006_pron_per_k",
+    "L1_LEX_005_dm_per_k",
+}
+
+# 展开后的标量字段（基线聚合时生成的 *_total）
+DICT_TOTAL_FEATURES = {
+    "L1_LEX_004_yqci_per_k_total",
+    "L1_LEX_006_pron_per_k_total",
+    "L1_LEX_005_dm_per_k_total",
 }
 
 
@@ -111,6 +119,7 @@ def main():
     ap.add_argument("--held-out", help="留出文章（手动模式）")
     ap.add_argument("--control", help="对照文（手动模式）")
     ap.add_argument("--corpus", help="语料目录（自动模式）")
+    ap.add_argument("--other-author", help="另一作者的语料目录（自动模式的对照组）")
     ap.add_argument("--holdout", type=int, default=20, help="自动留出比例（默认 20%%）")
     ap.add_argument("--rounds", type=int, default=5, help="自动模式跑几轮（默认 5 轮）")
     ap.add_argument("--avg-chars", type=int, default=None, help="基线平均每篇字数")
@@ -144,7 +153,13 @@ def main():
             n_holdout = max(1, int(len(files) * args.holdout / 100))
             random.shuffle(files)
             holdout = files[:n_holdout]
-            control = files[n_holdout:n_holdout + n_holdout]  # 用剩下的当对照
+            if args.other_author:
+                other_files = sorted(Path(args.other_author).glob("*.txt"))
+                control_files = other_files[:n_holdout]
+                control_text = "\n".join(f.read_text(encoding="utf-8") for f in control_files)
+            else:
+                control = files[n_holdout:n_holdout + n_holdout]  # 用剩下的当对照（警告：同作者对比意义有限）
+                control_text = "\n".join(f.read_text(encoding="utf-8") for f in control)
 
             # 拼起来当留出文
             held_text = "\n".join(f.read_text(encoding="utf-8") for f in holdout)
