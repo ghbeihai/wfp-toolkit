@@ -255,6 +255,48 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
     return res
 
 
+def _code_version() -> str:
+    """指纹口径版本：本脚本 + field_map + 四字格词表 + 是否装了 jieba。任何一项变了缓存自动失效。"""
+    import hashlib
+    import importlib.util
+    h = hashlib.sha256()
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.abspath(__file__), os.path.join(here, "field_map.py"),
+              os.path.join(here, "..", "data", "thuocl_chengyu.txt")):
+        try:
+            h.update(open(p, "rb").read())
+        except OSError:
+            h.update(p.encode())
+    h.update(b"jieba" if importlib.util.find_spec("jieba") else b"nojieba")
+    return h.hexdigest()[:16]
+
+
+def cached_extract(raw: str, doc_id: str = "", use_cache: bool = True) -> dict:
+    """内容哈希缓存（~/.cache/wenbi/fp 或 $WENBI_CACHE_DIR/fp）：同文本、同口径不重算。"""
+    import hashlib
+    cdir = None
+    if use_cache and not os.environ.get("WENBI_NO_CACHE"):
+        base = os.environ.get("WENBI_CACHE_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "wenbi")
+        cdir = os.path.join(base, "fp")
+    if cdir:
+        key = hashlib.sha256((_code_version() + "\0" + raw).encode("utf-8")).hexdigest()
+        path = os.path.join(cdir, key[:2], key + ".json")
+        if os.path.exists(path):
+            try:
+                res = json.load(open(path, encoding="utf-8"))
+                res["doc_id"] = doc_id
+                return res
+            except (OSError, ValueError):
+                pass
+    res = extract_metrics(raw, doc_id)
+    if cdir and res.get("chars"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        json.dump(res, open(tmp, "w", encoding="utf-8"), ensure_ascii=False)
+        os.replace(tmp, path)
+    return res
+
+
 def summarize(files: list, name: str = "", min_docs: int = 5) -> dict:
     """逐篇指纹 JSON → 基线（与 replicate.py 同一实现 field_map.aggregate_baseline）。"""
     from field_map import aggregate_baseline
@@ -268,6 +310,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="WFP L1/L2 硬指标提取 v0.2")
     ap.add_argument("file", nargs="?", help="UTF-8 文本文件路径")
     ap.add_argument("--json", action="store_true", help="输出完整 JSON")
+    ap.add_argument("--no-cache", action="store_true", help="不用指纹缓存（默认按文本内容哈希缓存）")
     ap.add_argument("--corpus-spi", action="store_true", help="SPI 431 篇全量（篇章级）")
     ap.add_argument("--corpus-aot", action="store_true", help="AoT 块级全量")
     ap.add_argument("--limit", type=int, default=0, help="限制处理篇数（0=全量）")
@@ -356,7 +399,7 @@ def main() -> None:
 
     raw = open(args.file, encoding="utf-8").read()
     doc_id = os.path.splitext(os.path.basename(args.file))[0]
-    res = extract_metrics(raw, doc_id)
+    res = cached_extract(raw, doc_id, use_cache=not args.no_cache)
     if not res["chars"]:
         sys.exit(f"错误：{args.file} 是空文本（去空白后 0 字），无法提取指纹")
     if args.json:
