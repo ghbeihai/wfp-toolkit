@@ -131,21 +131,44 @@ class _MockClient:
             out = None
         elif "体裁分类器" in text:
             out = {"genre": "essay", "confidence": 0.7}
-        elif "作者鉴别" in text:
-            out = {"choice": "A", "confidence": 0.6, "reason": "mock"}
-        elif "思维大纲" in text or "SPI+AoT 先导" in text:
-            out = {"stance": "先把底子讲清楚，再谈补什么",
-                   "frame": "从应用生活与分析性认知切入，少用玄虚",
-                   "decompose": ["澄清营养≠保健品", "蛋白质与微量元素", "睡眠压力比单补更重要"],
+        elif "篇章框架" in text or "棱角保留任务" in text or "思维大纲" in text or "SPI+AoT 先导" in text:
+            out = {"stance": "别指望吃一样东西就把问题解决，先把胡说八道撇开",
+                   "thesis_arc": "开题硬砸错误直觉→中段拆真正相关的点→纠偏极端忌口→收束钉死：辅助不是主力",
+                   "sections": [
+                     {"role": "破题", "purpose": "砸神效幻想", "point": "没那回事", "move": "转到真正机制"},
+                     {"role": "展开", "purpose": "给可操作主见", "point": "原料要够但工厂得开工", "move": "纠偏"},
+                     {"role": "收束", "purpose": "钉死边界", "point": "辅助不是主力", "move": ""}],
+                   "sharp_claims": ["神效食物是胡扯", "均衡比猛补重要"],
                    "must_include": ["食物优先", "别指望神药"],
-                   "must_avoid": ["堆砌术语吓人", "绝对化禁令"],
-                   "closing": "交给日常一口一口养",
+                   "must_avoid": ["中庸两边对", "流水账罗列"],
+                   "no_smoothing": ["不许改成也许都有道理"],
+                   "closing": "硬收：听医生，别押在吃上",
                    "spi_used": ["Applied Life Domains"],
                    "aot_used": ["抽象-具体转换"],
-                   "outline_text": "1. 破题：别一上来就补剂。2. 拆：原料→吸收→消耗。3. 收：日常饮食与作息。"}
+                   "outline_text": "先砸「吃黑补黑」；再讲微量元素与蛋白是原料不是仙丹；最后钉死营养只是辅助。"}
+        elif "棱角保留" in text:
+            out = {"score": 6, "confidence": 0.7, "kept_edges": ["硬砸神效"], "smoothed": [],
+                   "fix_hints": ["收束再硬半句"], "summary": "mock 棱角尚可"}
         elif "思维依从" in text or "SPI+AoT 依从" in text:
-            out = {"score": 5, "confidence": 0.7, "hits": ["有破题"], "misses": ["收束偏软"],
-                   "fix_hints": ["收束回到立场句"], "summary": "mock 依从中等"}
+            out = {"score": 5, "structure_score": 5, "confidence": 0.7, "hits": ["有破题"], "misses": ["收束偏软"],
+                   "fix_hints": ["按节推进，收束回到立场句"], "summary": "mock 依从中等"}
+        elif "作者鉴别" in text:
+            out = {"choice": "A", "confidence": 0.6, "reason": "mock"}
+        elif "篇章框架" in text or "棱角保留任务" in text or "思维大纲" in text or "SPI+AoT 先导" in text:
+            out = {"stance": "别指望吃一样东西就把问题解决，先把胡说八道撇开",
+                   "thesis_arc": "开题硬砸错误直觉→中段拆真正相关的点→纠偏极端忌口→收束钉死：辅助不是主力",
+                   "sections": [
+                     {"role": "破题", "purpose": "砸神效幻想", "point": "没那回事", "move": "转到真正机制"},
+                     {"role": "展开", "purpose": "给可操作主见", "point": "原料要够但工厂得开工", "move": "纠偏"},
+                     {"role": "收束", "purpose": "钉死边界", "point": "辅助不是主力", "move": ""}],
+                   "sharp_claims": ["神效食物是胡扯", "均衡比猛补重要"],
+                   "must_include": ["食物优先", "别指望神药"],
+                   "must_avoid": ["中庸两边对", "流水账罗列"],
+                   "no_smoothing": ["不许改成也许都有道理"],
+                   "closing": "硬收：听医生，别押在吃上",
+                   "spi_used": ["Applied Life Domains"],
+                   "aot_used": ["抽象-具体转换"],
+                   "outline_text": "先砸「吃黑补黑」；再讲微量元素与蛋白是原料不是仙丹；最后钉死营养只是辅助。"}
         elif "metaphors" in text:
             out = {"metaphors": [{"text": "人生是一场旅程", "domain": "旅程", "explain": "mock"}]}
         elif "cluster_id" in text:
