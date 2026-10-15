@@ -1,11 +1,18 @@
-# WFP L3 软评分协议（占位，v0.3 实现）
-# 复用 AoT 协议（<AoT_ROOT>/scripts/score_thinking.py）：
-#   双轮 temperature 0.3/0.7 取均值；证据句逐字引用原文 ≤3 条；confidence 0-1。
-
-provider: deepseek        # 与 AoT 对齐，待定
-rounds: [0.3, 0.7]        # 双轮 temperature
+# WFP LLM 配置（score_stylistics / score_metaphor 读取；llm_common.load_llm_cfg）
+# key 查找：env DEEPSEEK_API_KEY → $WENBI_ENV_FILE → <WFP_ROOT>/.env → $AOT_ROOT/.env → $SPI_ROOT/.env
+provider: deepseek
+model: deepseek-chat
+base_url: https://api.deepseek.com
+temperatures: [0.3, 0.7]  # L3 双轮 temperature（取均值）
+metaphor_temperature: 0.0
+metaphor_max_tokens: 8192
+concurrency: 8            # 并发请求数（遇 429 自动指数退避）
+max_retries: 5
+backoff_base: 2.0         # 首次重试等待秒数，之后翻倍（上限 backoff_max）
+backoff_max: 60.0
+timeout: 120
+max_text_chars: 6000      # 单次输入上限；超出截断并在结果中标 truncated
 evidence_max: 3           # 证据句条数上限
-confidence: true          # 输出 0-1 置信度
 scale: 1-7                # 与 AoT 尺子同刻度
 thresholds:
   low: [1.0, 2.49]
