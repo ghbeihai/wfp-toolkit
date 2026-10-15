@@ -23,8 +23,9 @@ pip install jieba pyyaml numpy openai python-dotenv
 # 2. 单文本提取硬指标（无需 LLM key；空文本报错退出 1）
 python3 scripts/extract_hard_metrics.py 某篇文章.txt --json
 
-# 3. 批量提取 + 建基线（<5 篇报错；--min-docs 可调）
-python3 scripts/extract_hard_metrics.py --batch ./原文 --out ./fp --summary --name 作者名
+# 3. 逐篇提取 + 聚合建基线（<5 篇报错；--min-docs 可调；doc_ids 写入基线）
+for f in 原文/*.txt; do python3 scripts/extract_hard_metrics.py "$f" --json > fp/$(basename "$f" .txt).json; done
+python3 scripts/extract_hard_metrics.py --summary fp/*.json --name 作者名 > fp/wfp_baseline_作者名.json
 
 # 4. 判别力自检（两关：对照文 ≥1.5、异作者 ≥1.2；--strict 时 FAIL 退出 2）
 python3 scripts/validate_discrimination.py --baseline fp/wfp_baseline_作者名.json \
