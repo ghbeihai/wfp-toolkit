@@ -1,0 +1,5 @@
+# wfp-toolkit 依赖（硬指标只需前两项；L3/L4 打分需 openai）
+jieba>=0.42
+pyyaml>=6.0
+openai>=1.30
+python-dotenv>=1.0
