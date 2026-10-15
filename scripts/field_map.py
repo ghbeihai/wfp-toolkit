@@ -222,7 +222,10 @@ def aggregate_baseline(rows: list, name: str = "", min_docs: int = MIN_BASELINE_
     missing = [k for k in delta_features() if k not in base]
     out = {"n_docs": len(flat_rows), "corpus": name, "version": version,
            "avg_chars": avg_chars, "field_map_version": FIELD_MAP_VERSION,
-           "missing_features": missing, "baseline": base}
+           "missing_features": missing,
+           # 建基线所用文档 id（自检用来排查留出文与基线重叠）
+           "doc_ids": [str(r.get("doc_id", "")) for r in flat_rows],
+           "baseline": base}
     check_baseline(out, min_docs=min_docs)
     return out
 
