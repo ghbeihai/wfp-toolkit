@@ -258,7 +258,6 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
 def _code_version() -> str:
     """指纹口径版本：本脚本 + field_map + 四字格词表 + 是否装了 jieba。任何一项变了缓存自动失效。"""
     import hashlib
-    import importlib.util
     h = hashlib.sha256()
     here = os.path.dirname(os.path.abspath(__file__))
     for p in (os.path.abspath(__file__), os.path.join(here, "field_map.py"),
@@ -267,7 +266,11 @@ def _code_version() -> str:
             h.update(open(p, "rb").read())
         except OSError:
             h.update(p.encode())
-    h.update(b"jieba" if importlib.util.find_spec("jieba") else b"nojieba")
+    try:  # 真导入而不是 find_spec：坏掉/被屏蔽的 jieba 也要算"无 jieba"口径
+        import jieba  # noqa: F401
+        h.update(b"jieba")
+    except Exception:  # noqa: BLE001
+        h.update(b"nojieba")
     return h.hexdigest()[:16]
 
 
