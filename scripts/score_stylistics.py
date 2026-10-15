@@ -1,47 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""WFP · 文风指纹 — L3 软评分器（v0.3）
+"""WFP · 文风指纹 — L3 软评分器（v0.4）
 
-复用 AoT 已验证协议（<AoT_ROOT>/scripts/score_thinking.py）：
-- 单维度独立调用，避免跨维度污染与顺序效应；
-- 结构化输出 JSON {score: 1-7, evidence: [...], confidence: 0-1}；
-- 双轮平均：temperature 0.3 / 0.7 两轮取均值，压低评分抖动；
-- 证据句逐字引用原文 ≤3 条；
-- 断点续跑：已完成的 (doc, dim) 跳过；
-- 无 API key 时进入模拟模式（结果带 simulated 标记）。
+协议（与 AoT score_thinking 对齐）：
+- 单维度独立调用；结构化 JSON {score: 1-7, evidence: [...], confidence: 0-1}；
+- 多轮 temperature（config/llm.yaml temperatures，默认 0.3/0.7）取均值；证据逐字引用 ≤3 条；
+- 断点续跑：已有有效分的 (doc, dim) 跳过；全部重试失败记 score=None/failed=True；
+- 无 key 直接报错退出（无模拟模式）；429/5xx/截断/JSON 解析失败指数退避重试（llm_common）。
 
-维度尺子：config/l3_dimensions.yaml（14 维，判定设问 + 锚点词 + 正反锚）。
-学术原则：维度定义有文献依据（docs/L3软评分维度清单.md）；anchors 为操作化示例。
+语料来源（三选一）：
+  --corpus-dir <目录或文件>   目标作者语料（.txt/.md，或 SPI dict / AoT items JSON），doc_id = 文件名 stem
+  --source spi [--spi-path]  data_sources.yaml 的 SPI 篇章 JSON（${SPI_ROOT}/${WFP_OBJ}）
+  --source aot [--aot-dir]   data_sources.yaml 的 AoT 块目录
 
 用法：
-    python3 scripts/score_stylistics.py --pilot 2 14     # 抽样 2 篇 × 14 维 × 双轮
-    python3 scripts/score_stylistics.py --dims 4         # 只用前 4 维
+    python3 scripts/score_stylistics.py --corpus-dir ./原文 --out-dir ./l3_scores --l3-baseline-out l3_baseline.json
+    python3 scripts/score_stylistics.py --corpus-dir ./原文 --dry-run     # 只估算调用次数
+    python3 scripts/score_stylistics.py --source spi --pilot 2 14        # 抽样 2 篇 × 14 维
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import os
 import re
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import yaml
+
+import data_sources
+import llm_common
 
 WFP_ROOT = Path(__file__).resolve().parent.parent
 DIMS_PATH = WFP_ROOT / "config" / "l3_dimensions.yaml"
 LLM_PATH = WFP_ROOT / "config" / "llm.yaml"
-# v0.4.20：数据源从 config/data_sources.yaml 读取
-_DS = yaml.safe_load((WFP_ROOT / "config" / "data_sources.yaml").read_text(encoding="utf-8"))
-AOT_ENV_PATH = Path(_DS["llm"]["env_path"])
-SPI_PATH = Path(_DS["corpus"]["spi_articles"])
-AOT_DIR = Path(_DS["corpus"]["aot_dir"])
-OUT_DIR = WFP_ROOT / "data" / "results" / "l3_scores"
-
-MAX_TEXT_CHARS = 6000  # 控制单次输入 token，超长截断
+DEFAULT_OUT_DIR = WFP_ROOT / "data" / "results" / "l3_scores"
 
 SYSTEM_PROMPT = """你是一位严谨的文风测量编码器（stylistic-pattern encoder）。
 
@@ -81,191 +77,189 @@ def render_definition(d: dict) -> str:
     return "\n".join(lines)
 
 
-def load_key() -> Optional[str]:
-    k = os.environ.get("DEEPSEEK_API_KEY")
-    if k:
-        return k
-    if AOT_ENV_PATH.exists():
-        for line in AOT_ENV_PATH.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("DEEPSEEK_API_KEY="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return None
-
-
 class StylisticScorer:
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or load_key()
-        if not self.api_key:
-            print("错误：未检测到 DEEPSEEK_API_KEY。\n"
-                  "请先 export DEEPSEEK_API_KEY=sk-... 或在 .env 文件中配置。",
-                  file=sys.stderr)
-            sys.exit(1)
-        self.simulated = False
-        try:
-            from openai import OpenAI
-        except ImportError:
-            print("[warn] openai 未安装，尝试 pip install openai ...")
-            os.system(f"{os.sys.executable} -m pip install -q openai")
-            from openai import OpenAI
-        self.client = OpenAI(api_key=self.api_key, base_url="https://api.deepseek.com", timeout=120)
-
-    def _call_once(self, definition: str, name: str, text: str, temperature: float) -> dict:
-        user = (
-            f"【文风维度定义】\n{definition}\n\n"
-            f"【待分析文本】\n{text}\n\n请按系统要求输出 JSON。"
-        )
-        resp = self.client.chat.completions.create(
-            model="deepseek-chat",
-            temperature=temperature,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user},
-            ],
-        )
-        content = resp.choices[0].message.content or ""
-        return json.loads(content)
-
-    def _simulate(self, name: str, definition: str, text: str) -> dict:
-        tokens = set(re.findall(r"[\u4e00-\u9fff]{2,}", text))
-        hits = 0
-        total = 0
-        for w in re.findall(r"[\u4e00-\u9fff]{2,}", definition):
-            total += 1
-            if w in tokens:
-                hits += 1
-        score = 1 if total == 0 else max(1, min(7, round(hits / max(total, 1) * 50)))
-        return {
-            "score": score,
-            "evidence": [text[:60] + ("…" if len(text) > 60 else "")],
-            "confidence": 0.1,
-            "simulated": True,
-        }
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.client = llm_common.make_client(llm_common.require_key(WFP_ROOT), cfg)
+        self.temperatures = list(cfg.get("temperatures") or [0.3, 0.7])
+        self.evidence_max = int(cfg.get("evidence_max", 3))
 
     def score_once(self, definition: str, name: str, text: str) -> dict:
+        text, truncated = llm_common.truncate(text, self.cfg)
+        user = f"【文风维度定义】\n{definition}\n\n【待分析文本】\n{text}\n\n请按系统要求输出 JSON。"
+        msgs = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
         raw_scores: List[int] = []
         evidence: List[str] = []
         confidences: List[float] = []
-        simulated = False
-        for t in (0.3, 0.7):
-            for attempt in range(2):
-                try:
-                    data = self._call_once(definition, name, text, t) if not self.simulated else self._simulate(name, definition, text)
-                    simulated = simulated or self.simulated or data.get("simulated", False)
-                    score = int(data["score"])
-                    if 1 <= score <= 7:
-                        raw_scores.append(score)
-                        ev = data.get("evidence", [])
-                        for e in ev:
-                            e = str(e).strip()
-                            if e and e not in evidence and len(evidence) < 3:
-                                evidence.append(e)
-                        confidences.append(float(data.get("confidence", 0.5)))
-                        break
-                except Exception as ex:
-                    if attempt == 1:
-                        print(f"    [warn] {name} t={t} 失败: {ex}")
-                    time.sleep(1.5)
+        errors = []
+        for t in self.temperatures:
+            try:
+                data = llm_common.chat_json(self.client, self.cfg, msgs, temperature=t, log_prefix=f"{name} t={t} ")
+                score = int(data["score"])
+                if not 1 <= score <= 7:
+                    raise ValueError(f"score 越界: {score}")
+            except Exception as ex:  # noqa: BLE001 —— 单轮失败记录后继续下一轮
+                errors.append(f"t={t}: {type(ex).__name__}: {str(ex)[:120]}")
+                print(f"    [warn] {name} t={t} 失败: {ex}", file=sys.stderr)
+                continue
+            raw_scores.append(score)
+            for e in data.get("evidence", []) or []:
+                e = str(e).strip()
+                if e and e not in evidence and len(evidence) < self.evidence_max:
+                    evidence.append(e)
+            confidences.append(float(data.get("confidence", 0.5)))
         if not raw_scores:
-            # 全部重试失败：score=None + failed 标记，不再伪装成 0 分/模拟分混进均值
             return {"score": None, "raw_scores": [], "evidence": [], "confidence": 0.0,
-                    "simulated": False, "failed": True}
+                    "simulated": False, "failed": True, "errors": errors, "truncated": truncated}
         return {
             "score": round(sum(raw_scores) / len(raw_scores), 2),
             "raw_scores": raw_scores,
             "evidence": evidence,
-            "confidence": round(sum(confidences) / len(confidences), 2) if confidences else 0.0,
-            "simulated": simulated,
+            "confidence": round(sum(confidences) / len(confidences), 2),
+            "simulated": False,
+            "truncated": truncated,
+            "model": self.cfg.get("model"),
         }
 
 
-def load_docs(source: str, limit: int) -> List[dict]:
-    docs = []
-    if source == "spi":
-        d = json.loads(SPI_PATH.read_text(encoding="utf-8"))
-        for title, v in d.items():
+def _items_from_json(path: Path, d) -> List[tuple]:
+    out = []
+    if isinstance(d, dict) and "items" in d:
+        for it in d["items"]:
+            txt = it.get("text") or it.get("content") or ""
+            if txt.strip():
+                out.append((str(it.get("id") or it.get("title") or path.stem), txt))
+    elif isinstance(d, dict):
+        for k, v in d.items():
             txt = " ".join(v) if isinstance(v, list) else str(v)
-            if len(txt) < 500:
-                continue  # 跳过汇总说明条/空条（如"共收录 431 篇"条目）
-            docs.append({"id": title, "text": txt[:MAX_TEXT_CHARS]})
-            if limit and len(docs) >= limit:
-                break
-    else:
-        for fn in sorted(AOT_DIR.glob("*.json")):
-            d = json.loads(fn.read_text(encoding="utf-8"))
-            for it in d.get("items", []):
-                txt = it.get("text") or it.get("content") or ""
-                if not txt:
-                    continue
-                docs.append({"id": f"{fn.stem}::{it.get('id','')}", "text": txt[:MAX_TEXT_CHARS]})
-                if limit and len(docs) >= limit:
-                    break
-            if limit and len(docs) >= limit:
-                break
+            if txt.strip():
+                out.append((str(k), txt))
+    return out
+
+
+def load_corpus_dir(p: str) -> List[dict]:
+    """目标作者语料：目录（.txt/.md/.json）或单文件 → [{id, text}]；doc_id 与 replicate.py 一致（文件 stem）。"""
+    pp = Path(p)
+    files = [pp] if pp.is_file() else sorted(f for f in pp.iterdir() if f.suffix.lower() in (".txt", ".md", ".json"))
+    docs = []
+    for f in files:
+        if f.suffix.lower() == ".json":
+            for i, t in _items_from_json(f, json.loads(f.read_text(encoding="utf-8"))):
+                docs.append({"id": i, "text": t})
+        else:
+            t = f.read_text(encoding="utf-8")
+            if t.strip():
+                docs.append({"id": f.stem, "text": t})
+            else:
+                print(f"[warn] 跳过空文本 {f.name}", file=sys.stderr)
     return docs
 
 
+def load_docs(args) -> List[dict]:
+    if args.corpus_dir:
+        docs = load_corpus_dir(args.corpus_dir)
+    elif args.source == "spi":
+        ds = data_sources.load()
+        spi = Path(args.spi_path) if args.spi_path else data_sources.resolve(ds["corpus"]["spi_articles"], "SPI 篇章 JSON")
+        docs = []
+        for i, t in _items_from_json(spi, json.loads(spi.read_text(encoding="utf-8"))):
+            if len(t) < 500:
+                continue  # 跳过汇总说明条/空条（如"共收录 431 篇"条目）
+            docs.append({"id": i, "text": t})
+    else:
+        ds = data_sources.load()
+        aot = Path(args.aot_dir) if args.aot_dir else data_sources.resolve(ds["corpus"]["aot_dir"], "AoT 块目录")
+        docs = []
+        for fn in sorted(aot.glob("*.json")):
+            for i, t in _items_from_json(fn, json.loads(fn.read_text(encoding="utf-8"))):
+                docs.append({"id": f"{fn.stem}::{i}", "text": t})
+    n = int(args.pilot[0]) if args.pilot else (args.limit or 0)
+    return docs[:n] if n else docs
+
+
+def out_name(doc_id: str) -> str:
+    """输出文件名：可读前缀 + 短哈希，避免截断后重名覆盖。"""
+    safe = re.sub(r"[^\w\u4e00-\u9fa5-]", "_", doc_id)[:40]
+    return f"{safe}_{hashlib.md5(doc_id.encode('utf-8')).hexdigest()[:8]}.json"
+
+
 def main():
-    ap = argparse.ArgumentParser(description="WFP L3 软评分器 v0.3")
+    ap = argparse.ArgumentParser(description="WFP L3 软评分器 v0.4（需 DEEPSEEK_API_KEY）")
+    ap.add_argument("--corpus-dir", help="目标作者语料目录或文件（.txt/.md/.json）；给了就忽略 --source")
+    ap.add_argument("--source", choices=["spi", "aot"], default="spi", help="无 --corpus-dir 时的语料源（默认 spi）")
+    ap.add_argument("--spi-path", help="覆盖 data_sources.yaml 的 SPI 篇章 JSON")
+    ap.add_argument("--aot-dir", help="覆盖 data_sources.yaml 的 AoT 块目录")
+    ap.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help=f"评分输出目录（默认 {DEFAULT_OUT_DIR}）")
+    ap.add_argument("--l3-baseline-out", help="评分完成后汇总 L3 基线到此 JSON（等价于再跑 build_l3_baseline.py）")
     ap.add_argument("--pilot", nargs="*", default=None, help="抽样：'篇数 维度数'，如 --pilot 2 14")
-    ap.add_argument("--source", choices=["spi", "aot"], default="spi", help="语料源（默认 SPI 篇章级）")
+    ap.add_argument("--limit", type=int, default=0, help="最多评多少篇（0=全量）")
     ap.add_argument("--dims", type=int, default=None, help="只用前 N 个维度")
+    ap.add_argument("--dry-run", action="store_true", help="只打印待评篇数与调用次数估算，不调用 LLM")
     args = ap.parse_args()
 
     dims = yaml.safe_load(DIMS_PATH.read_text(encoding="utf-8"))["dimensions"]
-    if args.dims:
-        dims = dims[: args.dims]
-    llm_cfg = yaml.safe_load(LLM_PATH.read_text(encoding="utf-8"))
-
-    scorer = StylisticScorer()
-    if scorer.simulated:
-        print("[!] 未找到 DEEPSEEK_API_KEY，进入模拟模式（结果带 simulated 标记）")
-
-    n_docs = int(args.pilot[0]) if args.pilot else 0  # 0=全量
-    docs = load_docs(args.source, n_docs)
-    print(f"[info] 待评 {len(docs)} 篇 × {len(dims)} 维 × 双轮 = {len(docs)*len(dims)*2} 次调用")
-
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    total = len(docs) * len(dims) * 2
-    done = 0
+    n_dims = args.dims or (int(args.pilot[1]) if args.pilot and len(args.pilot) > 1 else None)
+    if n_dims:
+        dims = dims[:n_dims]
+    cfg = llm_common.load_llm_cfg(LLM_PATH)
+    docs = load_docs(args)
+    if not docs:
+        sys.exit("错误：没有可评分的文本")
+    out_dir = Path(args.out_dir)
 
     def build_tasks():
         for doc in docs:
-            out_path = OUT_DIR / f"{doc['id'][:40].replace('/', '_')}.json"
-            existing = {}
-            if out_path.exists():
-                existing = json.loads(out_path.read_text(encoding="utf-8"))
+            out_path = out_dir / out_name(doc["id"])
+            existing = json.loads(out_path.read_text(encoding="utf-8")) if out_path.exists() else {}
             for dim in dims:
                 key = f"{doc['id']}::{dim['id']}"
-                if key in existing and (existing[key].get("score") or 0) > 0 and not existing[key].get("simulated", False):
+                e = existing.get(key) or {}
+                if (e.get("score") or 0) > 0 and not e.get("simulated") and not e.get("failed"):
                     continue
                 yield doc, out_path, existing, key, dim
 
     tasks = list(build_tasks())
+    n_temp = len(cfg.get("temperatures") or [0.3, 0.7])
+    n_long = sum(1 for d in docs if len(d["text"]) > int(cfg.get("max_text_chars", 6000)))
+    print(f"[info] {len(docs)} 篇 × {len(dims)} 维；待评 {len(tasks)} 项 × {n_temp} 轮 = {len(tasks) * n_temp} 次调用"
+          f"（model={cfg.get('model')}，并发 {cfg.get('concurrency')}）；超长将截断 {n_long} 篇")
+    if args.dry_run:
+        return
+
+    scorer = StylisticScorer(cfg)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    done, n_failed = 0, 0
 
     def run_task(t):
         doc, out_path, existing, key, dim = t
-        definition = render_definition(dim)
-        res = scorer.score_once(definition, dim["name"], doc["text"])
+        res = scorer.score_once(render_definition(dim), dim["name"], doc["text"])
         res["dim"] = dim["id"]
         res["dim_name"] = dim["name"]
+        res["doc_id"] = doc["id"]
         return out_path, existing, key, res
 
-    with ThreadPoolExecutor(max_workers=llm_cfg.get("concurrency", 12)) as ex:
-        futs = {ex.submit(run_task, t): t for t in tasks}
+    with ThreadPoolExecutor(max_workers=int(cfg.get("concurrency", 8))) as ex:
+        futs = [ex.submit(run_task, t) for t in tasks]
         for fut in as_completed(futs):
-            try:
-                out_path, existing, key, res = fut.result()
-                existing[key] = res
-                out_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-                done += 2
-                if done % 20 == 0 or done == total:
-                    print(f"  [prog] {done}/{total} 次调用完成", flush=True)
-            except Exception as ex:
-                print(f"  [err] {key} 失败: {ex}")
+            out_path, existing, key, res = fut.result()
+            existing[key] = res  # 只在主线程写文件
+            out_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+            done += 1
+            n_failed += bool(res.get("failed"))
+            if done % 20 == 0 or done == len(tasks):
+                print(f"  [prog] {done}/{len(tasks)} 项完成（失败 {n_failed}）", flush=True)
 
-    print(f"[ok] L3 评分完成，结果在 {OUT_DIR}")
+    print(f"[ok] L3 评分完成，结果在 {out_dir}（失败 {n_failed} 项，score=None 不进基线）")
+    if args.l3_baseline_out:
+        from build_l3_baseline import build_baseline, NoValidScores
+        try:
+            bl = build_baseline(out_dir)
+        except NoValidScores as e:
+            sys.exit(f"错误：{e}")
+        Path(args.l3_baseline_out).write_text(json.dumps(bl, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[ok] L3 基线：{bl['n_docs']} 篇 → {bl['n_dims']} 维 → {args.l3_baseline_out}")
+    if n_failed:
+        sys.exit(3)  # 有失败项：非 0 退出，提醒续跑
 
 
 if __name__ == "__main__":

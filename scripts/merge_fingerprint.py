@@ -40,9 +40,10 @@ def load_l3(doc_id: str, l3dir: str | None) -> dict | None:
     cands = glob.glob(f"{l3dir}/*.json")
     for f in cands:
         d = json.load(open(f, encoding="utf-8"))
-        if any(k.split("::")[0] == doc_id for k in d):
-            return {k.split("::")[1]: v["score"] for k, v in d.items()
-                    if isinstance(v.get("score"), (int, float)) and v["score"] > 0}
+        if any(k.rsplit("::", 1)[0] == doc_id for k in d):
+            return {k.rsplit("::", 1)[1]: v["score"] for k, v in d.items()
+                    if k.rsplit("::", 1)[0] == doc_id and isinstance(v.get("score"), (int, float))
+                    and v["score"] > 0 and not v.get("failed") and not v.get("simulated")}
     return None
 
 
