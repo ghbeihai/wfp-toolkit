@@ -43,7 +43,7 @@ DICT_FEATURES = {
 DICT_TOTAL_FEATURES = {
     "L1_LEX_004_yqci_per_k_total",
     "L1_LEX_006_pron_per_k_total",
-    "L1_LEX_005_dm_per_k_total",
+    "L1_LEX_005_dm_total",
 }
 
 
@@ -163,7 +163,6 @@ def main():
 
             # 拼起来当留出文
             held_text = "\n".join(f.read_text(encoding="utf-8") for f in holdout)
-            control_text = "\n".join(f.read_text(encoding="utf-8") for f in control)
 
             held_file = "/tmp/_held.txt"
             control_file = "/tmp/_control.txt"

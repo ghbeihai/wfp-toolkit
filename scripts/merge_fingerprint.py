@@ -145,6 +145,8 @@ def main():
                         if sd > 0:
                             deviations.append(abs(v - mean) / sd)
             l3_deviation = round(sum(deviations) / len(deviations), 3) if deviations else None
+        if l3_deviation is not None:
+            item["l3_deviation"] = l3_deviation
         if l3:
             item["l3_scores"] = l3
             item["l3_mean"] = round(sum(l3.values()) / len(l3), 2)

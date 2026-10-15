@@ -28,17 +28,19 @@ PER_DOC = {
 }
 
 # 字典型指标 → 展开成总和
+# 字典字段：生成文是字典，基线是 *_total 标量
+# 展开后用编号键名，和基线字段名对齐
 DICT_FEATURES = {
-    "L1_LEX_004_yqci_per_k": "语气词/千字(总和)",
-    "L1_LEX_006_pron_per_k": "人称代词/千字(总和)",
-    "L1_LEX_005_dm_per_k": "衔接词/千字(总和)",
+    "L1_LEX_004_yqci_per_k": "L1_LEX_004_yqci_per_k_total",
+    "L1_LEX_006_pron_per_k": "L1_LEX_006_pron_per_k_total",
+    "L1_LEX_005_dm": "L1_LEX_005_dm_total",
 }
 
 # 展开后的标量字段（基线聚合时生成的 *_total）
 DICT_TOTAL_FEATURES = {
     "L1_LEX_004_yqci_per_k_total",
     "L1_LEX_006_pron_per_k_total",
-    "L1_LEX_005_dm_per_k_total",
+    "L1_LEX_005_dm_total",
 }
 
 
