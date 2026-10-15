@@ -219,7 +219,7 @@ def main():
     if scorer.simulated:
         print("[!] 未找到 DEEPSEEK_API_KEY，进入模拟模式（结果带 simulated 标记）")
 
-    n_docs = int(args.pilot[0]) if args.pilot else 1
+    n_docs = int(args.pilot[0]) if args.pilot else 0  # 0=全量
     docs = load_docs(args.source, n_docs)
     print(f"[info] 待评 {len(docs)} 篇 × {len(dims)} 维 × 双轮 = {len(docs)*len(dims)*2} 次调用")
 
