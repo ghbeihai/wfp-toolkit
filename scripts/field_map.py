@@ -95,6 +95,42 @@ MIN_BASELINE_DOCS = 5        # 基线最少篇数（低于此 sd 不可信）
 MIN_DELTA_FEATURES = 10      # 可用（sd>0）特征最少个数
 
 
+# 人读标签（迭代修正 prompt / 报告用；生成端看不懂内部字段名）
+FEATURE_LABELS = {
+    "L1_SYN_001_avg_sl": "平均句长（字）",
+    "L1_SYN_002_sd_sl": "句长波动（标准差）",
+    "L1_SYN_002_short_lt10": "短句（<10字）占比",
+    "L1_SYN_002_long_gt40": "长句（>40字）占比",
+    "L1_SYN_002_med_sl": "句长中位数（字）",
+    "L1_SYN_007_burstiness": "句长起伏度",
+    "L1_SYN_005_ba_per_k": "把字句/千字",
+    "L1_SYN_005_bei_per_k": "被字句/千字",
+    "L1_SYN_005_rang_per_k": "让字句/千字",
+    "L1_SYN_005_shi_de_per_k": "“是…的”句/千字",
+    "L1_LEX_001_sttr100": "词汇多样性（STTR）",
+    "L1_LEX_007_pos_per_k": "正面情绪词/千字",
+    "L1_LEX_007_neg_per_k": "负面情绪词/千字",
+    "L1_SYN_006_fourchar_per_k": "四字格/千字",
+    "L1_LEX_006_wo_ni_ratio": "“我”与“你”之比",
+    "L2_DIS_003_pron_per_sent": "每句代词数",
+    "L4_SUR_001_meta_per_k": "隐喻/千字",
+    "L4_SUR_002_value_per_k": "价值判断词/千字",
+    "L4_SUR_003_pos_neg_ratio": "正负情绪之比",
+    "L1_SYN_004_question_per_k": "问句/千字",
+    "L1_SYN_004_rhet_per_k": "反问句/千字",
+    "L1_LEX_004_yqci_per_k_total": "语气词/千字",
+    "L1_LEX_006_pron_per_k_total": "人称代词/千字",
+    "L1_LEX_005_dm_per_k_total": "话语标记/千字",
+    "L2_DIS_002_conn_per_k_total": "连接词/千字",
+    "L1_LEX_008_cog_per_k_total": "认知词/千字",
+    "L1_SYN_003_punct_per_k_total": "标点/千字",
+}
+
+
+def label(key: str) -> str:
+    return FEATURE_LABELS.get(key, key)
+
+
 def weight(key: str) -> float:
     """Delta 中该特征的权重（相关特征组降权）。"""
     return _WEIGHT.get(key, 1.0)
