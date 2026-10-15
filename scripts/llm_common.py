@@ -129,9 +129,9 @@ class _MockClient:
                    "吃饭要慢。蔬菜要多。别熬夜。你记住了吗？"][len(text) % 3]  # 随 prompt 变化，模拟改写效果
             body = (tpl * 20 + "\n") * 3
             out = None
-        elif '"genre"' in text:
+        elif "体裁分类器" in text:
             out = {"genre": "essay", "confidence": 0.7}
-        elif '"choice"' in text:
+        elif "作者鉴别" in text:
             out = {"choice": "A", "confidence": 0.6, "reason": "mock"}
         elif "metaphors" in text:
             out = {"metaphors": [{"text": "人生是一场旅程", "domain": "旅程", "explain": "mock"}]}
