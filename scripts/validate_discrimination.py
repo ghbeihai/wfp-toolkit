@@ -41,11 +41,19 @@ def extract_fp(text_file: str) -> dict:
     return json.loads(r.stdout)
 
 
+RULER_WEIGHTS = None  # --weights：多尺子学习权重（ruler.py learn 产出）；None = field_map 默认权重
+
+
 def calc_delta(fp: dict, baseline: dict, avg_chars_override: int = None) -> float:
-    """统一走 field_map.delta（与 normalize/merge 同口径）。无可用特征 → DegenerateBaseline。"""
+    """统一走 field_map.delta（与 normalize/merge 同口径）；给了 --weights 时用 ruler 综合分。
+    无可用特征 → DegenerateBaseline。"""
     if avg_chars_override:
         baseline = dict(baseline, avg_chars=avg_chars_override)
-    d = fm_delta(fp, baseline)
+    if RULER_WEIGHTS is not None:
+        import ruler
+        d = ruler.score(ruler.vector(fp), baseline, RULER_WEIGHTS)["composite"]
+    else:
+        d = fm_delta(fp, baseline)
     if d is None:
         raise DegenerateBaseline("该文本与基线没有任何可比特征（sd>0），无法计算 Delta")
     return round(d, 3)
@@ -177,8 +185,12 @@ def main():
     ap.add_argument("--threshold-other", type=float, default=None, help="手动模式关 2 阈值（默认 1.2）")
     ap.add_argument("--min-docs", type=int, default=5, help="基线最少篇数（默认 5，低于即报错）")
     ap.add_argument("--strict", action="store_true", help="结论 FAIL 时退出码 2（CI/脚本用）")
+    ap.add_argument("--weights", help="多尺子权重 JSON（ruler.py learn 产出）：用学习权重的综合分代替默认 Delta")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     args = ap.parse_args()
+    if args.weights:
+        global RULER_WEIGHTS
+        RULER_WEIGHTS = json.loads(Path(args.weights).read_text(encoding="utf-8"))
 
     if args.rounds < 1:
         ap.error("--rounds 必须 ≥1")
