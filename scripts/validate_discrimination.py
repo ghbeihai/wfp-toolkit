@@ -19,32 +19,18 @@ import json
 import random
 import subprocess
 import sys
+from field_map import SCALAR_FIELDS, PER_DOC_FIELDS, DICT_TO_TOTAL, EXCLUDE_FIELDS, DUPLICATE_FIELDS
 from pathlib import Path
 
 
-EXCLUDE = {
-    "chars", "sentences", "uniq_chars",
-    "L1_LEX_001_ttr_char",
-    "L2_DIS_001_avg_para_len",
-}
+EXCLUDE = EXCLUDE_FIELDS | DUPLICATE_FIELDS
 
-PER_DOC = {
-    "L1_SYN_004_question_sents",
-    "L1_SYN_004_rhet_sents",
-}
+PER_DOC = set(PER_DOC_FIELDS.keys())
 
-DICT_FEATURES = {
-    "L1_LEX_004_yqci_per_k",
-    "L1_LEX_006_pron_per_k",
-    "L1_LEX_005_dm_per_k",
-}
+DICT_FEATURES = DICT_TO_TOTAL
 
 # 展开后的标量字段（基线聚合时生成的 *_total）
-DICT_TOTAL_FEATURES = {
-    "L1_LEX_004_yqci_per_k_total",
-    "L1_LEX_006_pron_per_k_total",
-    "L1_LEX_005_dm_total",
-}
+
 
 
 def extract_fp(text_file: str) -> dict:

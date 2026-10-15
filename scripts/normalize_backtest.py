@@ -9,39 +9,25 @@
 import argparse
 import json
 import sys
+from field_map import SCALAR_FIELDS, PER_DOC_FIELDS, DICT_TO_TOTAL, EXCLUDE_FIELDS, DUPLICATE_FIELDS
 
 
 # 篇幅指标排除名单
-EXCLUDE = {
-    # 排除重复字段（L1 和 L4 重复的情感词）
-    "L4_SUR_003_pos_per_k",
-    "L4_SUR_003_neg_per_k",
-    "chars", "sentences", "uniq_chars",
-    "L1_LEX_001_ttr_char",
-    "L2_DIS_001_avg_para_len",
-}
+# 从 field_map 统一读
+EXCLUDE = EXCLUDE_FIELDS | DUPLICATE_FIELDS
+PER_DOC = set(PER_DOC_FIELDS.keys())
+DICT_FEATURES = DICT_TO_TOTAL  # {原始名: *_total名}
 
 # 按篇指标 → 换算成每千字
-PER_DOC = {
-    "L1_SYN_004_question_sents",
-    "L1_SYN_004_rhet_sents",
-}
+
 
 # 字典型指标 → 展开成总和
 # 字典字段：生成文是字典，基线是 *_total 标量
 # 展开后用编号键名，和基线字段名对齐
-DICT_FEATURES = {
-    "L1_LEX_004_yqci_per_k": "L1_LEX_004_yqci_per_k_total",
-    "L1_LEX_006_pron_per_k": "L1_LEX_006_pron_per_k_total",
-    "L1_LEX_005_dm": "L1_LEX_005_dm_total",
-}
+
 
 # 展开后的标量字段（基线聚合时生成的 *_total）
-DICT_TOTAL_FEATURES = {
-    "L1_LEX_004_yqci_per_k_total",
-    "L1_LEX_006_pron_per_k_total",
-    "L1_LEX_005_dm_total",
-}
+
 
 
 def flatten_fp(fp: dict) -> dict:
