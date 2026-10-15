@@ -267,7 +267,8 @@ def _code_version() -> str:
         except OSError:
             h.update(p.encode())
     try:  # 真导入而不是 find_spec：坏掉/被屏蔽的 jieba 也要算"无 jieba"口径
-        import jieba  # noqa: F401
+        import importlib
+        importlib.import_module("jieba")
         h.update(b"jieba")
     except Exception:  # noqa: BLE001
         h.update(b"nojieba")
