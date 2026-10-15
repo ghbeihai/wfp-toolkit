@@ -133,6 +133,19 @@ class _MockClient:
             out = {"genre": "essay", "confidence": 0.7}
         elif "作者鉴别" in text:
             out = {"choice": "A", "confidence": 0.6, "reason": "mock"}
+        elif "思维大纲" in text or "SPI+AoT 先导" in text:
+            out = {"stance": "先把底子讲清楚，再谈补什么",
+                   "frame": "从应用生活与分析性认知切入，少用玄虚",
+                   "decompose": ["澄清营养≠保健品", "蛋白质与微量元素", "睡眠压力比单补更重要"],
+                   "must_include": ["食物优先", "别指望神药"],
+                   "must_avoid": ["堆砌术语吓人", "绝对化禁令"],
+                   "closing": "交给日常一口一口养",
+                   "spi_used": ["Applied Life Domains"],
+                   "aot_used": ["抽象-具体转换"],
+                   "outline_text": "1. 破题：别一上来就补剂。2. 拆：原料→吸收→消耗。3. 收：日常饮食与作息。"}
+        elif "思维依从" in text or "SPI+AoT 依从" in text:
+            out = {"score": 5, "confidence": 0.7, "hits": ["有破题"], "misses": ["收束偏软"],
+                   "fix_hints": ["收束回到立场句"], "summary": "mock 依从中等"}
         elif "metaphors" in text:
             out = {"metaphors": [{"text": "人生是一场旅程", "domain": "旅程", "explain": "mock"}]}
         elif "cluster_id" in text:
