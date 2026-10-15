@@ -7,8 +7,9 @@ L4 隐喻识别（DeepSeek 版）
   python3 score_metaphor.py 某篇文章.txt --json
 """
 import argparse
+
+import llm_common
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -45,26 +46,36 @@ SYSTEM_PROMPT = """你是一位严谨的隐喻识别编码员。
 CHUNK_SIZE = 2000  # 分块阈值：超过 2000 字就分块
 
 
-def load_key() -> str | None:
-    k = os.environ.get("DEEPSEEK_API_KEY")
-    if k:
-        return k.strip()
-    env_path = Path(__file__).resolve().parent.parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("DEEPSEEK_API_KEY="):
-                return line.split("=", 1)[1].strip().strip('"').strip("'")
-    return None
-
-
 def count_chars(text: str) -> int:
     return len(re.sub(r"\s+", "", text))
 
 
+def _split_long(p: str, max_len: int) -> list[str]:
+    """单段超过 max_len：先按句末标点切，再不行就硬切。"""
+    if len(p) <= max_len:
+        return [p]
+    sents = [x for x in re.split(r"(?<=[。！？!?；;…])", p) if x]
+    out, cur = [], ""
+    for s_ in sents:
+        while len(s_) > max_len:  # 单句也超长：硬切
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(s_[:max_len])
+            s_ = s_[max_len:]
+        if len(cur) + len(s_) > max_len and cur:
+            out.append(cur)
+            cur = s_
+        else:
+            cur += s_
+    if cur:
+        out.append(cur)
+    return out
+
+
 def split_text(text: str, max_len: int = CHUNK_SIZE) -> list[str]:
-    """按段落分块，每块不超过 max_len 字"""
-    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+    """按段落分块，每块不超过 max_len 字；单段超长时按句切分（原实现会把整段塞进一个超大块）。"""
+    paragraphs = [q for p in text.split("\n") if p.strip() for q in _split_long(p.strip(), max_len)]
     chunks = []
     current = ""
     for p in paragraphs:
@@ -78,54 +89,38 @@ def split_text(text: str, max_len: int = CHUNK_SIZE) -> list[str]:
     return chunks if chunks else [text]
 
 
-def score_chunk(text: str, client, model: str, retries: int = 2):
-    """返回该块的隐喻列表；被截断（finish_reason=length）或 JSON 解析失败时重试，
+def score_chunk(text: str, client, cfg: dict, model: str | None = None):
+    """返回该块的隐喻列表；429/5xx/截断/JSON 失败由 llm_common 指数退避重试，
     仍失败返回 None（调用方计入 failed_chunks，而不是静默当作 0 个隐喻）。"""
-    for attempt in range(retries + 1):
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=0.0,
-            max_tokens=8192,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-        )
-        choice = resp.choices[0]
-        content = (choice.message.content or "").strip()
-        if content.startswith("```"):
-            content = re.sub(r"^```(?:json)?\s*", "", content)
-            content = re.sub(r"\s*```$", "", content)
-        truncated = getattr(choice, "finish_reason", None) == "length"
-        try:
-            data = json.loads(content)
-            if not truncated:
-                return data.get("metaphors", [])
-        except json.JSONDecodeError:
-            pass
-        print(f"[warn] 分块输出{'被截断' if truncated else ' JSON 解析失败'}（第 {attempt + 1}/{retries + 1} 次）",
-              file=sys.stderr)
-    return None
+    c = dict(cfg)
+    if model:
+        c["model"] = model
+    try:
+        data = llm_common.chat_json(
+            client, c,
+            [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": text}],
+            temperature=float(cfg.get("metaphor_temperature", 0.0)),
+            max_tokens=int(cfg.get("metaphor_max_tokens", 8192)), log_prefix="metaphor ")
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 分块失败: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
+        return None
+    return data.get("metaphors", []) if isinstance(data, dict) else None
 
 
 def main():
-    ap = argparse.ArgumentParser(description="L4 隐喻识别（DeepSeek 版）")
+    ap = argparse.ArgumentParser(description="L4 隐喻识别（DeepSeek 版；模型/温度来自 config/llm.yaml）")
     ap.add_argument("file", help="待分析文本文件")
     ap.add_argument("--json", action="store_true", help="以 JSON 输出")
-    ap.add_argument("--model", default="deepseek-chat")
+    ap.add_argument("--out", help="把 JSON 结果写入此文件（供 merge/persona 引用）")
+    ap.add_argument("--model", default=None, help="覆盖 config/llm.yaml 的 model")
     args = ap.parse_args()
-
-    key = load_key()
-    if not key:
-        print("错误：未检测到 DEEPSEEK_API_KEY。", file=sys.stderr)
-        sys.exit(1)
 
     text = open(args.file, encoding="utf-8").read()
     chars = count_chars(text)
-
-    from openai import OpenAI
-    client = OpenAI(api_key=key, base_url="https://api.deepseek.com", timeout=120)
+    if chars == 0:
+        sys.exit(f"错误：{args.file} 是空文本")
+    cfg = llm_common.load_llm_cfg(Path(__file__).resolve().parent.parent / "config" / "llm.yaml")
+    client = llm_common.make_client(llm_common.require_key(Path(__file__).resolve().parent.parent), cfg)
 
     # 分块打分
     chunks = split_text(text)
@@ -134,7 +129,7 @@ def main():
     for i, chunk in enumerate(chunks):
         if len(chunks) > 1:
             print(f"  分块 {i+1}/{len(chunks)}（{len(chunk)} 字）...", file=sys.stderr)
-        got = score_chunk(chunk, client, args.model)
+        got = score_chunk(chunk, client, cfg, args.model)
         if got is None:
             failed_chunks.append(i)
         else:
@@ -144,10 +139,13 @@ def main():
 
     # 按根域聚合
     domain_counts = {d: 0 for d in METAPHOR_DOMAINS}
+    unknown = {}
     for m in all_metaphors:
         d = m.get("domain", "")
         if d in domain_counts:
             domain_counts[d] += 1
+        else:
+            unknown[d] = unknown.get(d, 0) + 1
 
     total = len(all_metaphors)
     result = {
@@ -155,12 +153,18 @@ def main():
         "total_metaphors": total,
         "meta_per_k": round(total / max(chars, 1) * 1000, 3),
         "domain_counts": domain_counts,
+        "unknown_domains": unknown,
         "domain_per_k": {d: round(n / max(chars, 1) * 1000, 3) for d, n in domain_counts.items()},
         "failed_chunks": failed_chunks,
         "n_chunks": len(chunks),
         "examples": [{"text": m.get("text", "")[:60], "domain": m.get("domain", "")} for m in all_metaphors[:10]],
     }
 
+    if unknown:
+        print(f"[warn] {sum(unknown.values())} 处隐喻的根域不在 12 域内，未计入密度：{unknown}", file=sys.stderr)
+    if args.out:
+        Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[ok] 写出 {args.out}", file=sys.stderr)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
