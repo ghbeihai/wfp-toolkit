@@ -13,42 +13,21 @@
 """
 import argparse
 import json
-import statistics
 
-# 参与 Delta 计算的标量特征：统一从 field_map 读，禁止各自维护
-from field_map import SCALAR_FIELDS, DICT_TO_TOTAL, EXCLUDE_FIELDS, DUPLICATE_FIELDS
-SCALAR_FEATURES = list(SCALAR_FIELDS.keys())
-# 字典展开后的 *_total 也纳入 Delta
-for orig, total in DICT_TO_TOTAL.items():
-    if total not in SCALAR_FEATURES:
-        SCALAR_FEATURES.append(total)
-
-
-def derive(fp: dict) -> dict:
-    """从嵌套字段派生标量（操作化口径）：语气词/衔接词总和、根域 Top1 占比。"""
-    out = {}
-    yq = fp.get("L1_LEX_004_yqci_per_k", {})
-    out["L1_LEX_004_yqci_per_k_total"] = round(sum(yq.values()), 3) if yq else 0.0
-    conn = fp.get("L2_DIS_002_conn_per_k", {})
-    out["L2_DIS_002_conn_per_k_total"] = round(sum(conn.values()), 3) if conn else 0.0
-    md = fp.get("L4_SUR_001_meta_domains", {})
-    if md and sum(md.values()) > 0:
-        top = max(md.values())
-        out["L4_SUR_001_meta_top1_pct"] = round(top / sum(md.values()), 4)
-    else:
-        out["L4_SUR_001_meta_top1_pct"] = 0.0
-    return out
+# 参与 Delta 计算的特征与口径：统一从 field_map 读，禁止各自维护
+from field_map import delta_features, flatten, delta as fm_delta
+SCALAR_FEATURES = delta_features()
 
 
 def load_baseline(path: str) -> dict:
+    """返回完整基线 JSON（含 avg_chars，供旧基线口径兼容换算）。"""
     d = json.load(open(path, encoding="utf-8"))
-    return d["baseline"]
+    return d if "baseline" in d else {"baseline": d}
 
 
 def vector(fp: dict) -> dict:
-    v = dict(fp)
-    v.update(derive(fp))
-    return {k: v.get(k) for k in SCALAR_FEATURES if isinstance(v.get(k), (int, float))}
+    """Delta 特征向量（与 normalize_backtest / validate_discrimination 同一实现）。"""
+    return flatten(fp)
 
 
 def load_l3(doc_id: str, l3dir: str | None) -> dict | None:
@@ -60,29 +39,17 @@ def load_l3(doc_id: str, l3dir: str | None) -> dict | None:
     for f in cands:
         d = json.load(open(f, encoding="utf-8"))
         if any(k.split("::")[0] == doc_id for k in d):
-            return {k.split("::")[1]: v["score"] for k, v in d.items() if v.get("score", 0) > 0}
+            return {k.split("::")[1]: v["score"] for k, v in d.items()
+                    if isinstance(v.get("score"), (int, float)) and v["score"] > 0}
     return None
 
 
 def delta(fp: dict, baseline: dict) -> dict:
     """Burrows 2002 Delta：z-score 化后 |z| 均值。返回逐特征 z 与总 Delta。
-    v0.4.19.1：burstiness 按样本句数自动选档（15-45 句→short 基线，≥50 句→long 基线）。"""
-    zs = {}
-    n_sent = fp.get("sentences", 0)
-    for k, x in vector(fp).items():
-        b = baseline.get(k)
-        if k == "L1_SYN_007_burstiness" and b:
-            if 15 <= n_sent <= 45:
-                b = baseline.get("L1_SYN_007_burstiness__short") or b
-            elif n_sent >= 50:
-                b = baseline.get("L1_SYN_007_burstiness__long") or b
-        if not b or b.get("sd", 0) == 0 or x is None:
-            continue
-        zs[k] = round((x - b["mean"]) / b["sd"], 3)
-    if not zs:
-        return {"delta": None, "n": 0, "zs": {}}
-    return {"delta": round(sum(abs(v) for v in zs.values()) / len(zs), 4),
-            "n": len(zs), "zs": zs}
+    口径由 field_map.delta 统一（v1.4.4 起不再查不存在的 burstiness__short/long）。"""
+    r = fm_delta(fp, baseline if "baseline" in baseline else {"baseline": baseline},
+                 return_detail=True)
+    return {"delta": r["delta"], "n": r["n"], "zs": r["zs"]}
 
 
 def summary(fp: dict) -> dict:

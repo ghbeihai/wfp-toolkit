@@ -19,17 +19,8 @@ import json
 import random
 import subprocess
 import sys
-from field_map import SCALAR_FIELDS, PER_DOC_FIELDS, DICT_TO_TOTAL, EXCLUDE_FIELDS, DUPLICATE_FIELDS
+from field_map import delta as fm_delta  # 唯一 Delta 实现
 from pathlib import Path
-
-
-EXCLUDE = EXCLUDE_FIELDS | DUPLICATE_FIELDS
-
-PER_DOC = set(PER_DOC_FIELDS.keys())
-
-DICT_FEATURES = DICT_TO_TOTAL
-
-# 展开后的标量字段（基线聚合时生成的 *_total）
 
 
 
@@ -45,51 +36,21 @@ def extract_fp(text_file: str) -> dict:
 
 
 def calc_delta(fp: dict, baseline: dict, avg_chars_override: int = None) -> float:
-    bl = baseline.get("baseline", baseline)
-    chars = fp.get("chars", 0)
-    avg_chars = avg_chars_override or baseline.get("avg_chars", 500)
-
-    total = 0.0
-    n = 0
-
-    for k, v in fp.items():
-        if k in EXCLUDE:
-            continue
-        if isinstance(v, dict):
-            if k in DICT_FEATURES:
-                v = sum(x for x in v.values() if isinstance(x, (int, float)))
-                k = DICT_FEATURES[k]  # 键名改成 *_total，和基线对齐
-            else:
-                continue
-        if not isinstance(v, (int, float)):
-            continue
-        if k in PER_DOC and chars > 0:
-            v = v * 1000 / chars
-        if k not in bl:
-            continue
-        bl_v = bl[k]
-        if isinstance(bl_v, dict):
-            mean = bl_v.get("mean", 0)
-            sd = bl_v.get("sd", 0)
-            if k in PER_DOC:
-                mean = mean * 1000 / avg_chars
-                sd = sd * 1000 / avg_chars
-        else:
-            mean = bl_v
-            sd = 0
-        if sd > 0:
-            total += abs(v - mean) / sd
-            n += 1
-    return round(total / n, 3) if n > 0 else 999.0
+    """统一走 field_map.delta（与 normalize/merge 同口径）。"""
+    if avg_chars_override:
+        baseline = dict(baseline, avg_chars=avg_chars_override)
+    d = fm_delta(fp, baseline)
+    return round(d, 3) if d is not None else 999.0
 
 
-def run_one_test(held_out_file: str, control_file: str, baseline: dict, avg_chars: int = None) -> dict:
+def run_one_test(held_out_file: str, control_file: str, baseline: dict, avg_chars: int = None,
+                 threshold: float = 1.5) -> dict:
     held_out_fp = extract_fp(held_out_file)
     control_fp = extract_fp(control_file)
     delta_held = calc_delta(held_out_fp, baseline, avg_chars)
     delta_control = calc_delta(control_fp, baseline, avg_chars)
     ratio = round(delta_control / delta_held, 2) if delta_held > 0 else 0
-    passed = ratio >= 1.5
+    passed = ratio >= threshold
     return {
         "delta_held": delta_held,
         "delta_control": delta_control,
@@ -110,6 +71,8 @@ def main():
     ap.add_argument("--holdout", type=int, default=20, help="自动留出比例（默认 20%%）")
     ap.add_argument("--rounds", type=int, default=5, help="自动模式跑几轮（默认 5 轮）")
     ap.add_argument("--avg-chars", type=int, default=None, help="基线平均每篇字数")
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="判别比阈值（默认：同作者留出 1.5；--other-author 1.2）")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     args = ap.parse_args()
 
@@ -117,7 +80,8 @@ def main():
 
     # 手动模式
     if args.held_out and args.control:
-        result = run_one_test(args.held_out, args.control, baseline, args.avg_chars)
+        result = run_one_test(args.held_out, args.control, baseline, args.avg_chars,
+                              args.threshold or 1.5)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
@@ -156,7 +120,8 @@ def main():
             Path(held_file).write_text(held_text, encoding="utf-8")
             Path(control_file).write_text(control_text, encoding="utf-8")
 
-            res = run_one_test(held_file, control_file, baseline, args.avg_chars)
+            thr = args.threshold or (1.2 if args.other_author else 1.5)
+            res = run_one_test(held_file, control_file, baseline, args.avg_chars, thr)
             results.append(res)
             print(f"第 {r+1} 轮: 判别比 {res['ratio']} {'PASS' if res['passed'] else 'FAIL'}")
 

@@ -8,102 +8,28 @@
 """
 import argparse
 import json
-import sys
-from field_map import SCALAR_FIELDS, PER_DOC_FIELDS, DICT_TO_TOTAL, EXCLUDE_FIELDS, DUPLICATE_FIELDS
-
-
-# 篇幅指标排除名单
-# 从 field_map 统一读
-EXCLUDE = EXCLUDE_FIELDS | DUPLICATE_FIELDS
-PER_DOC = set(PER_DOC_FIELDS.keys())
-DICT_FEATURES = DICT_TO_TOTAL  # {原始名: *_total名}
-
-# 按篇指标 → 换算成每千字
-
-
-# 字典型指标 → 展开成总和
-# 字典字段：生成文是字典，基线是 *_total 标量
-# 展开后用编号键名，和基线字段名对齐
-
-
-# 展开后的标量字段（基线聚合时生成的 *_total）
+from field_map import flatten, baseline_stat  # 唯一口径实现
 
 
 
 def flatten_fp(fp: dict) -> dict:
-    """我:你比例截断：限制在 0.1 - 10 之间，防止分母小爆炸"""
-    if "L1_LEX_006_wo_ni_ratio" in fp:
-        v = fp["L1_LEX_006_wo_ni_ratio"]
-        fp["L1_LEX_006_wo_ni_ratio"] = max(0.1, min(v, 10.0))
-    return _flatten_fp_impl(fp)
-
-def _flatten_fp_impl(fp: dict) -> dict:
-    """把指纹拍平成标量字典"""
-    chars = fp.get("chars", 0)
-    result = {}
-
-    for k, v in fp.items():
-        if k in EXCLUDE:
-            continue
-        if isinstance(v, dict):
-            if k in DICT_FEATURES:
-                total = sum(x for x in v.values() if isinstance(x, (int, float)))
-                result[DICT_FEATURES[k]] = round(total, 2)
-        elif isinstance(v, (int, float)):
-            if k in PER_DOC and chars > 0:
-                result[k] = round(v * 1000 / chars, 2)
-            elif "_per_k" in k:
-                result[k] = round(v, 2)
-            elif k == "L1_SYN_001_avg_sl":
-                result[k] = round(v, 1)
-            elif k == "L1_LEX_001_sttr100":
-                result[k] = round(v, 3)
-            elif "ratio" in k:
-                result[k] = round(v, 3)
-    return result
+    """拍平成 Delta 特征向量：统一走 field_map.flatten（含我:你截断、按篇→每千字）。"""
+    return flatten(fp)
 
 
 def calc_delta(gen_norm: dict, baseline: dict, avg_chars_override: int = None) -> dict:
-    """计算 z-score 距离"""
-    bl = baseline.get("baseline", baseline)
-    avg_chars = avg_chars_override or baseline.get("avg_chars", 500)
-
+    """计算 z-score 距离。gen_norm 已是 flatten 后的每千字口径，基线同口径（v1 旧基线由
+    baseline_stat 兼容换算），因此这里不再二次换算。"""
+    if avg_chars_override:
+        baseline = dict(baseline, avg_chars=avg_chars_override)
     deltas = {}
-    matched = []
-
     for k, gen_v in gen_norm.items():
-        if k not in bl:
-            # 按篇特征在基线里可能叫原名
-            for bl_k in PER_DOC:
-                if k == bl_k:
-                    bl_v = bl.get(bl_k, {})
-                    mean = bl_v.get("mean", 0) * 1000 / avg_chars
-                    sd = bl_v.get("sd", 0) * 1000 / avg_chars
-                    if sd > 0:
-                        deltas[k] = abs(gen_v - mean) / sd
-                        matched.append(k)
-                    break
+        st = baseline_stat(baseline, k)
+        if not st or not st[1]:
             continue
-
-        bl_v = bl[k]
-        if isinstance(bl_v, dict):
-            mean = bl_v.get("mean", 0)
-            sd = bl_v.get("sd", 0)
-        else:
-            mean = bl_v
-            sd = 0
-
-        # 按篇特征：基线是每篇，需要换算成每千字再对比
-        if k in PER_DOC:
-            mean = mean * 1000 / avg_chars
-            sd = sd * 1000 / avg_chars
-
-        if sd > 0:
-            deltas[k] = abs(gen_v - mean) / sd
-            matched.append(k)
-
-    total = sum(deltas.values())
-    avg = total / len(matched) if matched else 0
+        deltas[k] = abs(gen_v - st[0]) / st[1]
+    matched = list(deltas)
+    avg = sum(deltas.values()) / len(matched) if matched else 0
     return {
         "delta": round(avg, 3),
         "n_features": len(matched),
@@ -132,7 +58,7 @@ def main():
         return
 
     print(f"每千字归一化后 Delta: {result['delta']}（{result['n_features']} 项）")
-    print(f"\n逐项对比（z-score，越低越像）:")
+    print("\n逐项对比（z-score，越低越像）:")
     for k, v in sorted(result["per_feature"].items(), key=lambda x: -x[1])[:10]:
         print(f"  {k}: {v}")
 
