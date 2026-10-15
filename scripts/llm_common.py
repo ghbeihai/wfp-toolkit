@@ -216,3 +216,32 @@ def truncate(text: str, cfg: dict, label: str = "") -> tuple[str, bool]:
               file=sys.stderr)
         return text[:n], True
     return text, False
+
+
+def score_1to7(client, cfg: dict, messages: list, label: str = "", evidence_max: int = 3,
+               truncated: bool = False) -> dict:
+    """多温度（cfg.temperatures）各调用一次取均值的 1-7 打分协议；单轮失败记录后继续，
+    全部失败返回 score=None/failed=True（不伪装成 0 分）。"""
+    scores, confs, evs, errors = [], [], [], []
+    for t in list(cfg.get("temperatures") or DEFAULTS["temperatures"]):
+        try:
+            data = chat_json(client, cfg, messages, temperature=t, log_prefix=f"{label} t={t} ")
+            s = int(data["score"])
+            if not 1 <= s <= 7:
+                raise ValueError(f"score 越界: {s}")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"t={t}: {type(e).__name__}: {str(e)[:120]}")
+            print(f"    [warn] {label} t={t} 失败: {e}", file=sys.stderr)
+            continue
+        scores.append(s)
+        confs.append(float(data.get("confidence", 0.5)))
+        for e in data.get("evidence", []) or []:
+            e = str(e).strip()
+            if e and e not in evs and len(evs) < evidence_max:
+                evs.append(e)
+    if not scores:
+        return {"score": None, "raw_scores": [], "evidence": [], "confidence": 0.0,
+                "simulated": False, "failed": True, "errors": errors, "truncated": truncated}
+    return {"score": round(sum(scores) / len(scores), 2), "raw_scores": scores, "evidence": evs,
+            "confidence": round(sum(confs) / len(confs), 2), "simulated": False,
+            "truncated": truncated, "model": cfg.get("model")}
