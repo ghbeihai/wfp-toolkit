@@ -75,13 +75,17 @@ DUPLICATE_FIELDS = {
 }
 
 
-FIELD_MAP_VERSION = 3
+FIELD_MAP_VERSION = 4
 # v2：dm/问句/修辞反问 统一每千字；paras、meta_domains_total 不参与 Delta
 # v3：词TTR 退出 Delta；我:你、正负情感比 改为 +1 平滑（零分母不再退化成原始计数）；
 #     句长簇降权；基线 sd 用样本标准差（n-1）
 WO_NI_CLIP = (0.1, 10.0)
 # v3 口径变化的字段：旧基线（field_map_version<3）里的值不可比，baseline_stat 直接跳过
 CHANGED_IN_V3 = {"L1_LEX_006_wo_ni_ratio", "L4_SUR_003_pos_neg_ratio"}
+# 字段 → 口径最近一次变更的版本；基线 field_map_version 低于它时该字段跳过（口径不同不可比）
+#   v3：比值 +1 平滑；v4：篇内句长 sd / burstiness 改样本标准差（n-1）
+CHANGED_IN = {**{k: 3 for k in CHANGED_IN_V3},
+              "L1_SYN_002_sd_sl": 4, "L1_SYN_007_burstiness": 4}
 
 # 高相关特征组降权：组内每个特征权重 = 组权重 / 组大小（其余特征权重 1）
 # 句长 6 项（均值/标准差/中位/短句/长句/CV）高度相关，原来等于给句长 6 票
@@ -183,8 +187,8 @@ def flatten(fp: dict) -> dict:
 def baseline_stat(baseline: dict, key: str):
     """返回 (mean, sd)；兼容 v1 旧基线（按篇字段用 avg_chars 近似换算）。缺失返回 None。"""
     bl = baseline.get("baseline", baseline)
-    if key in CHANGED_IN_V3 and (baseline.get("field_map_version") or 1) < 3:
-        return None  # 旧基线该字段口径不同（未平滑），跳过
+    if (baseline.get("field_map_version") or 1) < CHANGED_IN.get(key, 0):
+        return None  # 旧基线该字段口径不同（未平滑 / 总体 sd），跳过
     b = bl.get(key)
     if isinstance(b, dict) and b.get("mean") is not None:
         return b["mean"], b.get("sd") or 0.0

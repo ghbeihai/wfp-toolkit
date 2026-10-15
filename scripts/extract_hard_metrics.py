@@ -167,7 +167,8 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
 
     slen = [len(s) for s in sents]
     avg_sl = round(statistics.mean(slen), 2) if slen else None
-    sd_sl = round(statistics.pstdev(slen), 2) if len(slen) > 1 else 0.0
+    # v4：篇内句长/段长 sd 改为样本标准差（n-1），与基线聚合口径一致
+    sd_sl = round(statistics.stdev(slen), 2) if len(slen) > 1 else 0.0
     # L1_SYN_007 burstiness 句长变异系数（CV=sd/mean）：人类文本通常 >0.5，机器文本 <0.3
     burstiness = round(sd_sl / avg_sl, 4) if avg_sl else None
     short_pct = round(sum(1 for n in slen if n < 10) / max(len(slen), 1), 4)
@@ -176,7 +177,7 @@ def extract_metrics(raw_text: str, doc_id: str = "") -> dict:
 
     para_lens = [len(p) for p in paras]
     avg_pl = round(statistics.mean(para_lens), 2) if para_lens else 0.0
-    sd_pl = round(statistics.pstdev(para_lens), 2) if len(para_lens) > 1 else 0.0
+    sd_pl = round(statistics.stdev(para_lens), 2) if len(para_lens) > 1 else 0.0
 
     # 情感词密度（操作化词表）
     pos_n = sum(text.count(w) for w in POS_WORDS)
