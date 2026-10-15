@@ -67,7 +67,7 @@ def calc_delta(gen_norm: dict, baseline: dict) -> dict:
                     # 基线是按篇的，用基线平均 chars 换算
                     mean_per_doc = bl_v.get("mean", 0)
                     # 估算平均 chars（从基线 n_docs 和 chars 推）
-                    avg_chars = baseline.get("avg_chars", 2000)
+                    avg_chars = baseline.get("avg_chars", 500)
                     mean_per_k = mean_per_doc * 1000 / avg_chars
                     sd_per_doc = bl_v.get("sd", 0)
                     sd_per_k = sd_per_doc * 1000 / avg_chars
@@ -103,13 +103,19 @@ def main():
     ap = argparse.ArgumentParser(description="每千字归一回测")
     ap.add_argument("gen_fp", help="生成文指纹 JSON")
     ap.add_argument("--baseline", required=True, help="基线 JSON")
-    ap.add_argument("--avg-chars", type=int, default=2000, help="基线平均每篇字数（用于换算按篇指标）")
+    ap.add_argument("--avg-chars", type=int, default=None, help="基线平均每篇字数（用于换算按篇指标）")
     ap.add_argument("--json", action="store_true", help="输出完整 JSON")
     args = ap.parse_args()
 
     gen = json.load(open(args.gen_fp, encoding="utf-8"))
     bl = json.load(open(args.baseline, encoding="utf-8"))
-    bl["avg_chars"] = args.avg_chars
+    avg_chars = args.avg_chars
+    if avg_chars is None:
+        # 从基线推算：用平均句长 × 估算平均句子数（每篇约 10-15 句）
+        avg_sl = bl.get("baseline", {}).get("L1_SYN_001_avg_sl", {}).get("mean", 25)
+        avg_chars = int(avg_sl * 12)  # 粗略估算每篇 12 句
+        print(f"[warn] 未指定 --avg-chars，自动估算为 {avg_chars} 字/篇（基于平均句长 {avg_sl}），如不准请手动指定", file=__import__("sys").stderr)
+    bl["avg_chars"] = avg_chars
 
     gen_norm = flatten_fp(gen)
     result = calc_delta(gen_norm, bl)

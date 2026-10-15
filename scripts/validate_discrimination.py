@@ -36,19 +36,43 @@ def extract_fp(text_file: str) -> dict:
 
 
 def calc_delta(fp: dict, baseline: dict) -> float:
-    """计算 z-score 距离"""
+    """计算 z-score 距离（每千字归一化，排除篇幅指标）"""
     bl = baseline.get("baseline", baseline)
+    chars = fp.get("chars", 0)
+
+    # 排除篇幅指标
+    exclude = {"chars", "sentences", "uniq_chars", "ttr_char"}
+    # 按篇指标换算成每千字
+    per_doc = {"L1_SYN_004_question_sents", "L1_SYN_004_rhet_sents"}
+    # 字典型指标展开成总和
+    dict_features = {"L1_LEX_004_yqci_per_k", "L1_LEX_006_pron_per_k"}
+
     total = 0.0
     n = 0
+
     for k, v in fp.items():
+        if k in exclude:
+            continue
+        if isinstance(v, dict):
+            if k in dict_features:
+                v = sum(x for x in v.values() if isinstance(x, (int, float)))
+            else:
+                continue
         if not isinstance(v, (int, float)):
             continue
+        if k in per_doc and chars > 0:
+            v = v * 1000 / chars
         if k not in bl:
             continue
         bl_v = bl[k]
         if isinstance(bl_v, dict):
             mean = bl_v.get("mean", 0)
             sd = bl_v.get("sd", 0)
+            # 基线按篇指标也需要换算成每千字
+            if k in per_doc:
+                avg_chars = baseline.get("avg_chars", 500)
+                mean = mean * 1000 / avg_chars
+                sd = sd * 1000 / avg_chars
         else:
             mean = bl_v
             sd = 0
@@ -64,6 +88,7 @@ def main():
     ap.add_argument("--held-out", required=True, help="原作者留出文章（不进基线的那 20%）")
     ap.add_argument("--control", required=True, help="对照文（随机文本或非模仿文）")
     ap.add_argument("--other-author", help="另一作者的文章（可选，测异作者判别）")
+    ap.add_argument("--avg-chars", type=int, default=None, help="基线平均每篇字数（用于换算按篇指标）")
     ap.add_argument("--json", action="store_true", help="输出完整 JSON")
     args = ap.parse_args()
 
