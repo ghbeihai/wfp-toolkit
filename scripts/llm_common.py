@@ -123,7 +123,17 @@ class _MockClient:
         if self.mode == "flaky" and key not in self._seen:
             self._seen.add(key)
             raise RateLimitError("mock 429")
-        if "metaphors" in text:
+        if not kw.get("response_format"):  # 文本生成（闭环生成用）
+            tpl = ["我们今天聊一聊营养这件事。其实很多人都有误区，对吧？",
+                   "营养不是越多越好，关键在于平衡，在于长期坚持，在于对自己身体的了解和尊重。",
+                   "吃饭要慢。蔬菜要多。别熬夜。你记住了吗？"][len(text) % 3]  # 随 prompt 变化，模拟改写效果
+            body = (tpl * 20 + "\n") * 3
+            out = None
+        elif '"genre"' in text:
+            out = {"genre": "essay", "confidence": 0.7}
+        elif '"choice"' in text:
+            out = {"choice": "A", "confidence": 0.6, "reason": "mock"}
+        elif "metaphors" in text:
             out = {"metaphors": [{"text": "人生是一场旅程", "domain": "旅程", "explain": "mock"}]}
         elif "cluster_id" in text:
             out = {"hits": [{"cluster_id": 1, "relevance": 6, "reason": "mock"},
@@ -133,8 +143,10 @@ class _MockClient:
         else:
             out = {"score": 4 + (len(text) % 3), "evidence": ["mock"], "confidence": 0.6}
 
+        content_ = body if out is None else json.dumps(out, ensure_ascii=False)
+
         class _M:
-            content = json.dumps(out, ensure_ascii=False)
+            content = content_
 
         class _C:
             message = _M()
@@ -171,6 +183,61 @@ class TruncatedOutput(Exception):
     pass
 
 
+# ---------- 内容哈希缓存 ----------
+# 相同（模型, base_url, messages, temperature, max_tokens, json_mode）的调用直接复用结果：
+# 文本没变就不重算（SPI/AoT/WFP 打分、隐喻、体裁、盲测都走这里）。
+#   WENBI_CACHE_DIR 缓存目录（默认 ~/.cache/wenbi/llm）；WENBI_NO_CACHE=1 关闭。
+#   mock 模式与真实调用分开缓存（键里含 mock 标记）。
+def _cache_dir():
+    if os.environ.get("WENBI_NO_CACHE"):
+        return None
+    d = Path(os.environ.get("WENBI_CACHE_DIR") or (Path.home() / ".cache" / "wenbi")) / "llm"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    return d
+
+
+def _cache_key(kw: dict, cfg: dict) -> str:
+    import hashlib
+    blob = json.dumps({"k": kw, "base_url": cfg.get("base_url"), "mock": os.environ.get("WENBI_MOCK_LLM") or ""},
+                      ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key):
+    d = _cache_dir()
+    p = d / key[:2] / f"{key}.json" if d else None
+    if p and p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))["content"]
+        except (OSError, ValueError, KeyError):
+            return None
+    return None
+
+
+def _cache_put(key, content: str):
+    d = _cache_dir()
+    if not d:
+        return
+    p = d / key[:2] / f"{key}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"content": content}, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, p)  # 原子写，并发安全
+
+
+CACHE_STATS = {"hit": 0, "miss": 0}
+
+
+def chat_text(client, cfg: dict, messages: list, temperature: float | None = None,
+              max_tokens: int | None = None, log_prefix: str = "") -> str:
+    """纯文本生成（闭环生成用）；同样带退避重试与缓存。"""
+    return chat_json(client, cfg, messages, temperature=temperature, max_tokens=max_tokens,
+                     json_mode=False, log_prefix=log_prefix)
+
+
 def chat_json(client, cfg: dict, messages: list, temperature: float | None = None,
               max_tokens: int | None = None, json_mode: bool = True, log_prefix: str = ""):
     """调用 chat.completions 并解析 JSON；对 429/5xx/超时/截断/JSON 解析失败做指数退避重试。
@@ -185,18 +252,29 @@ def chat_json(client, cfg: dict, messages: list, temperature: float | None = Non
         kw["max_tokens"] = max_tokens
     if json_mode:
         kw["response_format"] = {"type": "json_object"}
+    ckey = _cache_key(kw, cfg)
+    cached = _cache_get(ckey)
+    if cached is not None:
+        CACHE_STATS["hit"] += 1
+        return json.loads(cached) if json_mode else cached
+    CACHE_STATS["miss"] += 1
     last = None
     for attempt in range(retries + 1):
         try:
             resp = client.chat.completions.create(**kw)
             ch = resp.choices[0]
             content = (ch.message.content or "").strip()
+            if getattr(ch, "finish_reason", None) == "length":
+                raise TruncatedOutput("LLM 输出被截断（finish_reason=length）")
+            if not json_mode:
+                _cache_put(ckey, content)
+                return content
             if content.startswith("```"):
                 content = content.strip("`")
                 content = content[4:] if content.lower().startswith("json") else content
-            if getattr(ch, "finish_reason", None) == "length":
-                raise TruncatedOutput("LLM 输出被截断（finish_reason=length）")
-            return json.loads(content)
+            data = json.loads(content)
+            _cache_put(ckey, content)  # 只缓存成功解析的结果
+            return data
         except Exception as e:  # noqa: BLE001 —— 分类后决定是否重试
             last = e
             if attempt >= retries or not _is_retryable(e):
