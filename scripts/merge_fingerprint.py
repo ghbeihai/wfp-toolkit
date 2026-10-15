@@ -117,6 +117,7 @@ def main():
     ap.add_argument("files", nargs="+", help="指纹 JSON 路径（1 个或多个）")
     ap.add_argument("--baseline", required=True, help="基线 JSON（wfp_baseline_*.json）")
     ap.add_argument("--l3dir", default=None, help="L3 评分目录（data/results/l3_scores），融合软评分")
+    ap.add_argument("--l3-baseline", default=None, help="L3 基线 JSON（计算软画像偏差）")
     ap.add_argument("--json", action="store_true", help="输出完整 JSON")
     args = ap.parse_args()
 
@@ -128,6 +129,22 @@ def main():
         item = {"file": f, "summary": summary(fp), "delta": d["delta"],
                 "n_features": d["n"], "zs": d["zs"]}
         l3 = load_l3(fp.get("doc_id", ""), args.l3dir)
+
+        # L3 偏差计算
+        l3_deviation = None
+        if l3 and args.l3_baseline:
+            l3_bl = json.loads(open(args.l3_baseline, encoding="utf-8").read())
+            l3_bl_mean = l3_bl.get("baseline", l3_bl)
+            deviations = []
+            for k, v in l3.items():
+                if k in l3_bl_mean:
+                    bl_v = l3_bl_mean[k]
+                    if isinstance(bl_v, dict):
+                        mean = bl_v.get("mean", 0)
+                        sd = bl_v.get("sd", 1)
+                        if sd > 0:
+                            deviations.append(abs(v - mean) / sd)
+            l3_deviation = round(sum(deviations) / len(deviations), 3) if deviations else None
         if l3:
             item["l3_scores"] = l3
             item["l3_mean"] = round(sum(l3.values()) / len(l3), 2)
